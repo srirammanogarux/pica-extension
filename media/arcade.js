@@ -225,8 +225,106 @@
     },
   };
 
+  // ================= GAME: PIXEL BUILDER =================
+  // A hidden pixel artwork assembles piece by piece — every correct answer
+  // flies a chunk of pixels in. Wrong = the chunk never arrives (gap stays).
+  const ARTS = [
+    { name: "fish", rows: [
+      "M....CCCCC....",
+      "MM..CCYYYCC...",
+      "MMMCCYYYYYCC..",
+      "MMMCCYKYYYYCC.",
+      "MMMCCYYYYYCC..",
+      "MM..CCYYYCC...",
+      "M....CCCCC....",
+    ]},
+    { name: "rocket", rows: [
+      ".....RR.....",
+      "....RRRR....",
+      "....RWWR....",
+      "....RWWR....",
+      "....RRRR....",
+      "..Y.RRRR.Y..",
+      ".YY.RRRR.YY.",
+      ".YYRRRRRRYY.",
+      "....O..O....",
+      "...OO..OO...",
+    ]},
+    { name: "mug", rows: [
+      "..SS..SS....",
+      "...SS..SS...",
+      ".BBBBBBBB...",
+      ".BWWWWWWB.GG",
+      ".BWWWWWWB..G",
+      ".BWWWWWWB..G",
+      ".BWWWWWWB.GG",
+      ".BBBBBBBB...",
+      "..BBBBBB....",
+    ]},
+  ];
+  const ART_COLORS = { C: "#4EC9F5", Y: "#F5E663", M: "#E24FB4", K: "#1A1614", R: "#E8823C", W: "#BFEFFF", O: "#F5A05A", G: "#8B4A2B", B: "#E24FB4", S: "#c9c2b8" };
+
+  const pixelbuilder = {
+    label: "PIXEL BUILDER — every right answer builds the picture",
+    cells: [], chunks: [], placed: [], flying: [], shakeT: 0, cell: 12, ox: 0, oy: 0,
+    init() {
+      const art = ARTS[Math.floor(Math.random() * ARTS.length)];
+      const rows = art.rows, H = rows.length, W = rows[0].length;
+      this.cell = Math.floor(Math.min((canvas.height - 44) / H, (canvas.width * 0.55) / W));
+      this.ox = Math.round((canvas.width - W * this.cell) / 2);
+      this.oy = Math.round((canvas.height - H * this.cell) / 2);
+      this.cells = [];
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const ch = rows[y][x];
+        if (ch && ch !== ".") this.cells.push({ x, y, c: ART_COLORS[ch] || "#fff" });
+      }
+      // build bottom-up: split into one chunk per question
+      this.cells.sort((a, b) => b.y - a.y || a.x - b.x);
+      const per = Math.ceil(this.cells.length / TOTAL);
+      this.chunks = [];
+      for (let i = 0; i < TOTAL; i++) this.chunks.push(this.cells.slice(i * per, (i + 1) * per));
+    },
+    newQuestion() { if (!this.cells.length) this.init(); },
+    onCorrect() {
+      const chunk = this.chunks[S.i] || [];
+      const now = performance.now();
+      chunk.forEach((cell, i) => {
+        const edge = Math.random();
+        const sx = edge < .5 ? (Math.random() < .5 ? -30 : canvas.width + 30) : Math.random() * canvas.width;
+        const sy = edge < .5 ? Math.random() * canvas.height : (Math.random() < .5 ? -30 : canvas.height + 30);
+        this.flying.push({ cell, sx, sy, t0: now + i * 22 });
+      });
+      tone(980, .25, .07);   // final snap after the pieces land
+    },
+    onWrong() { this.shakeT = performance.now(); },
+    tick() {
+      ctx.fillStyle = "#1A1614"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const now = performance.now();
+      let sx = 0, sy = 0;
+      if (now - this.shakeT < 300) { sx = (Math.random() - .5) * 8; sy = (Math.random() - .5) * 6; }
+      // faint ghost outline of the full artwork
+      ctx.globalAlpha = 0.10;
+      this.cells.forEach((c) => { ctx.fillStyle = "#F4F6F0"; ctx.fillRect(this.ox + c.x * this.cell + sx, this.oy + c.y * this.cell + sy, this.cell - 1, this.cell - 1); });
+      ctx.globalAlpha = 1;
+      // placed pixels
+      this.placed.forEach((c) => { ctx.fillStyle = c.c; ctx.fillRect(this.ox + c.x * this.cell + sx, this.oy + c.y * this.cell + sy, this.cell - 1, this.cell - 1); });
+      // flying pieces (ease-out cubic), land → placed + white flash
+      this.flying = this.flying.filter((f) => {
+        const p = Math.min(1, Math.max(0, (now - f.t0) / 420));
+        if (p <= 0) return true;
+        const e = 1 - Math.pow(1 - p, 3);
+        const tx = this.ox + f.cell.x * this.cell, ty = this.oy + f.cell.y * this.cell;
+        const x = f.sx + (tx - f.sx) * e, y = f.sy + (ty - f.sy) * e;
+        ctx.fillStyle = p > .92 ? "#ffffff" : f.cell.c;
+        ctx.fillRect(x + sx, y + sy, this.cell - 1, this.cell - 1);
+        if (p >= 1) { this.placed.push(f.cell); return false; }
+        return true;
+      });
+    },
+  };
+
   // ---------------- game registry + loop ----------------
-  const GAMES = { bugzap };
+  const GAMES = { bugzap, pixelbuilder };
   const game = GAMES[R.game] || bugzap;
   document.getElementById("scene-label").textContent = game.label;
   document.getElementById("hud-title").textContent = "GAME MODE";

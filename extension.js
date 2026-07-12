@@ -582,7 +582,8 @@ class Engine {
 // ARCADE — Game Mode tab: progress on top, hearts as lives, game scene
 // above, question below. Games picked at random from what's built.
 // ---------------------------------------------------------------------
-const BUILT_GAMES = ["bugzap"]; // grows as games ship: snake, merge, builder…
+const BUILT_GAMES = ["bugzap", "pixelbuilder"]; // grows as games ship: snake, merge, fish, match, boss
+const GAME_NAMES = { bugzap: "Bug Zapper", pixelbuilder: "Pixel Builder" };
 
 class Arcade {
   constructor(context, engine) { this.context = context; this.engine = engine; this.panel = null; }
@@ -598,7 +599,11 @@ class Arcade {
     eng.panel.post({ type: "busy", on: false });
     if (questions.length < 3) { eng.panel.post({ type: "chat", text: "My question machine jammed — try again in a sec 🐾" }); return; }
 
-    const gameId = BUILT_GAMES[Math.floor(Math.random() * BUILT_GAMES.length)];
+    // random game, but never the same one twice in a row
+    const last = this.context.globalState.get("pica.lastGame", "");
+    const pool = BUILT_GAMES.length > 1 ? BUILT_GAMES.filter((g) => g !== last) : BUILT_GAMES;
+    const gameId = pool[Math.floor(Math.random() * pool.length)];
+    this.context.globalState.update("pica.lastGame", gameId);
     const hiscores = this.context.globalState.get("pica.hiscores", {});
     const payload = {
       game: gameId, mode,
@@ -619,8 +624,7 @@ class Arcade {
         const hs = this.context.globalState.get("pica.hiscores", {});
         if ((m.score || 0) > (hs[m.game] || 0)) { hs[m.game] = m.score; this.context.globalState.update("pica.hiscores", hs); }
         logEvent(this.context, "game", 0);
-        const names = { bugzap: "Bug Zapper" };
-        eng.panel.post({ type: "chat", text: "🎮 **" + (names[m.game] || m.game) + "**: " + m.score + " pts · " + m.correct + "/" + m.total + " right · best combo ×" + Math.max(m.bestCombo, 1) + (m.won ? ". That concept is settling in 🐾" : ". The bugs got you this time — rematch anytime 🐾") });
+        eng.panel.post({ type: "chat", text: "🎮 **" + (GAME_NAMES[m.game] || m.game) + "**: " + m.score + " pts · " + m.correct + "/" + m.total + " right · best combo ×" + Math.max(m.bestCombo, 1) + (m.won ? ". That concept is settling in 🐾" : ". Tough round — rematch anytime 🐾") });
       }
       if (m.type === "back") {
         if (this.panel) this.panel.dispose();
