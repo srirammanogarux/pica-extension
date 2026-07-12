@@ -4,13 +4,13 @@
    writes into your workspace, explains it in designer language, then makes
    you type the key line yourself.
 
-   Explanations are powered by Hermes too — the Nous inference API
-   (OpenAI-compatible). Key comes from portal.nousresearch.com.
+   Explanations are powered by Hermes 4 via OpenRouter
+   (OpenAI-compatible). Key comes from openrouter.ai/keys.
    ===================================================================== */
 const vscode = require("vscode");
 
 const CONFIG = {
-  API_BASE: "https://inference-api.nousresearch.com/v1",
+  API_BASE: "https://openrouter.ai/api/v1",   // OpenRouter — serves the same Hermes 4 models
   DEFAULT_MODEL: "nousresearch/hermes-4-70b",
   DEBOUNCE_MS: 1400,     // let an agent write-burst settle before teaching
   COOLDOWN_MS: 15000,    // min gap between proactive teach moments
@@ -18,7 +18,7 @@ const CONFIG = {
   MAX_SNAPSHOT_FILES: 400,
   CODE_EXTS: ["js","jsx","ts","tsx","py","html","css","scss","vue","svelte","go","rb","java","c","cpp","h","swift","kt","php","rs","sql","sh"],
   IGNORE_SEGMENTS: ["node_modules",".git","dist","build","out",".next",".venv","venv","__pycache__",".vercel","coverage",".idea"],
-  PORTAL_URL: "https://portal.nousresearch.com",
+  PORTAL_URL: "https://openrouter.ai/keys",
 };
 
 // ---------------------------------------------------------------------
@@ -51,7 +51,12 @@ async function hermesChat(context, messages) {
   const model = vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
   const res = await fetch(CONFIG.API_BASE + "/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + key,
+      "HTTP-Referer": "https://pica-landing.vercel.app",   // OpenRouter attribution headers
+      "X-Title": "Pica",
+    },
     body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 900 }),
   });
   if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
@@ -234,7 +239,7 @@ class Engine {
   fail(e) {
     const msg = String((e && e.message) || e);
     if (msg === "NO_KEY")  return this.panel.post({ type: "needKey" });
-    if (msg === "BAD_KEY") return this.panel.post({ type: "error", text: "That key didn't work (401). Grab it from portal.nousresearch.com and paste it again via “Pica: Set Hermes (Nous) API Key”." });
+    if (msg === "BAD_KEY") return this.panel.post({ type: "error", text: "That key didn't work (401). Check your OpenRouter key (openrouter.ai/keys) and paste it again via “Pica: Set API Key”." });
     this.panel.post({ type: "error", text: "Hermes hiccupped: " + msg.slice(0, 140) });
   }
 
@@ -397,7 +402,7 @@ function activate(context) {
     vscode.commands.registerCommand("pica.open", () => vscode.commands.executeCommand("workbench.view.extension.pica")),
     vscode.commands.registerCommand("pica.simulateHermes", simulateHermes),
     vscode.commands.registerCommand("pica.setApiKey", async () => {
-      const key = await vscode.window.showInputBox({ prompt: "Paste your Nous portal API key (portal.nousresearch.com)", password: true, ignoreFocusOut: true });
+      const key = await vscode.window.showInputBox({ prompt: "Paste your OpenRouter API key (openrouter.ai/keys)", password: true, ignoreFocusOut: true });
       if (key && key.trim()) {
         await context.secrets.store("pica.nousKey", key.trim());
         vscode.window.showInformationMessage("Pica: key saved 🐾");

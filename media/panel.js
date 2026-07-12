@@ -34,8 +34,8 @@
   // ---------- states ----------
   function showNeedKey() {
     setStatus("needs a key");
-    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. First I need your <strong>Hermes key</strong> so I can think.");
-    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="paste your Nous portal key…"/><div style="height:6px"></div><a class="k-link" href="' + state.portal + '">get it free → portal.nousresearch.com</a></div>');
+    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. First I need your <strong>OpenRouter key</strong> so I can think (it runs my Hermes brain).");
+    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="paste your OpenRouter key (sk-or-…)"/><div style="height:6px"></div><a class="k-link" href="' + state.portal + '">get one → openrouter.ai/keys</a></div>');
     thread.appendChild(wrap);
     const saveB = action("Save key");
     const inp = wrap.querySelector("#keyin");

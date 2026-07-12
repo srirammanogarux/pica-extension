@@ -2,7 +2,7 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your Hermes agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "stimuler",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
@@ -22,7 +22,7 @@
     },
     "commands": [
       { "command": "pica.open", "title": "Pica: Open Panel" },
-      { "command": "pica.setApiKey", "title": "Pica: Set Hermes (Nous) API Key" },
+      { "command": "pica.setApiKey", "title": "Pica: Set API Key (OpenRouter)" },
       { "command": "pica.simulateHermes", "title": "Pica: Simulate a Hermes Edit (demo)" }
     ],
     "configuration": {
