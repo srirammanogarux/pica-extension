@@ -150,6 +150,8 @@
       if (p < 1) requestAnimationFrame(tick);
     })(t0);
     document.getElementById("back").addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    const again = document.getElementById("again");
+    if (again) again.addEventListener("click", () => { again.disabled = true; again.textContent = "🎲 rolling…"; vscode.postMessage({ type: "again" }); });
   }
 
   // ---------------- pixel helpers ----------------

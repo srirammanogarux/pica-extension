@@ -604,6 +604,8 @@ class Arcade {
     const pool = BUILT_GAMES.length > 1 ? BUILT_GAMES.filter((g) => g !== last) : BUILT_GAMES;
     const gameId = pool[Math.floor(Math.random() * pool.length)];
     this.context.globalState.update("pica.lastGame", gameId);
+    this.lastMode = mode;
+    eng.panel.post({ type: "chat", text: "🎲 Rolled: **" + (GAME_NAMES[gameId] || gameId) + "**! Good luck 🐾" });
     const hiscores = this.context.globalState.get("pica.hiscores", {});
     const payload = {
       game: gameId, mode,
@@ -625,6 +627,9 @@ class Arcade {
         if ((m.score || 0) > (hs[m.game] || 0)) { hs[m.game] = m.score; this.context.globalState.update("pica.hiscores", hs); }
         logEvent(this.context, "game", 0);
         eng.panel.post({ type: "chat", text: "🎮 **" + (GAME_NAMES[m.game] || m.game) + "**: " + m.score + " pts · " + m.correct + "/" + m.total + " right · best combo ×" + Math.max(m.bestCombo, 1) + (m.won ? ". That concept is settling in 🐾" : ". Tough round — rematch anytime 🐾") });
+      }
+      if (m.type === "again") {
+        this.start(this.lastMode || "mcq");   // fresh questions, fresh dice roll
       }
       if (m.type === "back") {
         if (this.panel) this.panel.dispose();
@@ -692,7 +697,10 @@ class Arcade {
   <div class="endcard__score">0</div>
   <div class="endcard__hi"></div>
   <div class="endcard__stats"><span id="st-correct"></span><span id="st-combo"></span></div>
-  <button class="btn" id="back">Back to Pica 🐾</button>
+  <div style="display:flex;gap:10px;justify-content:center">
+    <button class="btn" id="again">🎲 Play again</button>
+    <button class="btn" id="back" style="background:var(--paper)">Back to Pica 🐾</button>
+  </div>
 </div></div>
 <script nonce="${nonce}">window.PICA_ROUND=${data};</script>
 <script nonce="${nonce}" src="${uri("arcade.js")}"></script>

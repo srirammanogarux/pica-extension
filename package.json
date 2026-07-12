@@ -2,7 +2,7 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your Hermes agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "stimuler",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
