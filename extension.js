@@ -102,17 +102,18 @@ async function verifyEmail(email) {
   return !!data.ok;
 }
 
-function parseLessonJSON(text) {
+function parseJSONBlock(text, requiredKey) {
   // tolerate ```json fences and stray prose around the object
   let t = text.replace(/```json/gi, "```").replace(/```/g, "").trim();
   const a = t.indexOf("{"), b = t.lastIndexOf("}");
   if (a !== -1 && b > a) t = t.slice(a, b + 1);
   try {
     const j = JSON.parse(t);
-    if (j && j.explanation) return j;
+    if (j && (!requiredKey || j[requiredKey] !== undefined)) return j;
   } catch (e) { /* fall through */ }
   return null;
 }
+const parseLessonJSON = (text) => parseJSONBlock(text, "explanation");
 
 function teachSystemPrompt(tone) {
   const voice = tone === "professor"
@@ -130,14 +131,15 @@ function teachSystemPrompt(tone) {
   ].join("\n");
 }
 
-function chatSystemPrompt(tone, lastDiff) {
+function chatSystemPrompt(tone, contextBlock) {
   const voice = tone === "professor"
     ? "Tone: professor — precise, calm, jargon-free."
     : "Tone: friend — warm, playful, a 🐾 when it fits.";
   return [
-    "You are Pica, a pixel-art cat in a code editor, teaching a designer who cannot read code yet. Answer their question in designer language: plain words, design-world analogies, 2-5 short sentences max. Never a wall of text. Never condescend.",
+    "You are Pica, a pixel-art cat living inside the user's code editor (VS Code), teaching a designer who cannot read code yet. Answer in designer language: plain words, design-world analogies, 2-5 short sentences max. Never a wall of text. Never condescend.",
+    "IMPORTANT: You are inside their real software project. ALWAYS interpret questions in the context of software development and THIS project. Examples: 'OpenRouter key' means the API key for the OpenRouter LLM service (never a Wi-Fi router); 'terminal' means the editor's terminal; 'agent' means their coding agent (Hermes/Claude). When they ask what something is, relate it to what they're building right now if you can.",
     voice,
-    lastDiff ? "Context — the most recent code change in their project (they may ask about it):\n" + lastDiff : "",
+    contextBlock ? "=== LIVE PROJECT CONTEXT (use this!) ===\n" + contextBlock : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -200,6 +202,12 @@ class PicaPanel {
     <button data-tone="professor" class="tone">Prof</button>
   </div>
 </header>
+<nav class="toolsrow">
+  <button class="tool" id="t-recap" title="Short recap of what's being built">📋 Recap</button>
+  <button class="tool" id="t-quiz" title="Quiz me on what I learned">🧠 Quiz</button>
+  <button class="tool" id="t-fp" title="Blank out the real file so I can practice">✍️ Blank the file</button>
+  <button class="tool" id="t-fpcheck" title="Check my filled blanks">✓ Check</button>
+</nav>
 <main id="thread"></main>
 <footer class="composer">
   <input id="ask" type="text" placeholder="Ask Pica anything…" autocomplete="off"/>
@@ -224,8 +232,47 @@ class Engine {
     this.lastTeachAt = 0;
     this.lesson = null;                // current {teaser, explanation, concept, practice, file}
     this.lastDiffText = "";
+    this.recentDiffs = [];             // rolling [{file, lines, at}] — session context
+    this.taughtConcepts = [];          // rolling list of concepts Pica taught
+    this.workspaceBrief = "";          // project name + top-level structure
+    this.quiz = null;                  // {questions, i, score}
+    this.fp = null;                    // file practice {doc, file, blanks}
     this.chatHistory = [];
     this.watcher = null;
+  }
+
+  // What Pica knows about the session right now — fed to every chat/recap/quiz.
+  contextBlock() {
+    const parts = [];
+    if (this.workspaceBrief) parts.push(this.workspaceBrief);
+    const ed = vscode.window.activeTextEditor;
+    if (ed && ed.document && !ed.document.isUntitled) {
+      const rel = vscode.workspace.asRelativePath(ed.document.uri);
+      const sel = ed.selection && !ed.selection.isEmpty ? ed.document.getText(ed.selection) : "";
+      const slice = sel || ed.document.getText().split("\n").slice(0, 60).join("\n");
+      parts.push("Open file right now: " + rel + "\n---\n" + slice.slice(0, 2400) + "\n---");
+    }
+    if (this.recentDiffs.length) {
+      parts.push("Recent changes the agent made this session:\n" + this.recentDiffs
+        .map((d) => "• " + d.file + ":\n" + d.lines.join("\n")).join("\n").slice(0, 2400));
+    }
+    if (this.taughtConcepts.length) parts.push("Concepts Pica already taught this session: " + this.taughtConcepts.join(" · "));
+    return parts.join("\n\n").slice(0, 6000);
+  }
+
+  async buildWorkspaceBrief() {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return;
+    try {
+      const root = folders[0];
+      const entries = await vscode.workspace.fs.readDirectory(root.uri);
+      const listing = entries
+        .filter(([name]) => !CONFIG.IGNORE_SEGMENTS.includes(name) && !name.startsWith("."))
+        .slice(0, 30)
+        .map(([name, type]) => (type === vscode.FileType.Directory ? name + "/" : name))
+        .join(", ");
+      this.workspaceBrief = "The user's project: \"" + root.name + "\" — top level: " + listing;
+    } catch (e) { /* best-effort */ }
   }
 
   get tone() { return this.context.globalState.get("pica.tone", "friend"); }
@@ -256,6 +303,11 @@ class Engine {
         case "explain":   return this.panel.post({ type: "lesson", data: this.lesson || null });
         case "practiceSubmit": return this.checkPractice(m.answer);
         case "ask":       return this.answer(String(m.text || ""));
+        case "recap":     return this.recap();
+        case "quiz":      return this.startQuiz();
+        case "quizPick":  return this.quizPick(Number(m.pick));
+        case "filePractice": return this.startFilePractice();
+        case "fileCheck": return this.checkFilePractice();
         case "simulate":  return vscode.commands.executeCommand("pica.simulateHermes");
       }
     } catch (e) { this.fail(e); }
@@ -289,6 +341,7 @@ class Engine {
   // ---------- watching ----------
   async startWatching() {
     if (this.watcher || !vscode.workspace.workspaceFolders) return;
+    this.buildWorkspaceBrief();
     // snapshot the workspace so the first agent edit diffs cleanly
     const glob = "**/*.{" + CONFIG.CODE_EXTS.join(",") + "}";
     const exclude = "{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/out/**,**/.next/**,**/venv/**,**/.venv/**}";
@@ -343,6 +396,8 @@ class Engine {
     const rel = vscode.workspace.asRelativePath(best.fsPath);
     const diffText = "File: " + rel + "\nAdded/changed lines:\n" + best.added.slice(0, 40).join("\n").slice(0, 3000);
     this.lastDiffText = diffText;
+    this.recentDiffs.push({ file: rel, lines: best.added.slice(0, 12), at: Date.now() });
+    if (this.recentDiffs.length > 4) this.recentDiffs.shift();
 
     this.panel.post({ type: "spotted", file: rel });
     let lesson = null;
@@ -356,6 +411,10 @@ class Engine {
     } catch (e) { this.panel.post({ type: "spotfail" }); return this.fail(e); }
     lesson.file = rel;
     this.lesson = lesson;
+    if (lesson.concept) {
+      this.taughtConcepts.push(lesson.concept);
+      if (this.taughtConcepts.length > 8) this.taughtConcepts.shift();
+    }
     this.panel.post({ type: "moment", data: { file: rel, teaser: lesson.teaser, hasPractice: !!(lesson.practice && lesson.practice.display && lesson.practice.answer) } });
   }
 
@@ -369,6 +428,128 @@ class Engine {
     this.panel.post({ type: "practiceResult", ok, answer: p.answer, concept: this.lesson.concept || "" });
   }
 
+  // ---------- recap: short "what's happening" for the panel ----------
+  async recap() {
+    this.panel.post({ type: "busy", on: true });
+    try {
+      const ctx = this.contextBlock();
+      if (!ctx) { this.panel.post({ type: "chat", text: "Nothing to recap yet — build something (or run a simulated Hermes edit) and ask me again 🐾" }); return; }
+      const reply = await hermesChat(this.context, [
+        { role: "system", content: chatSystemPrompt(this.tone, ctx) },
+        { role: "user", content: "Give me a SHORT session recap: in 3-5 tiny bullets (plain designer language, no jargon), what is being built/changed in this project right now and what each recent change does for the product. Keep the whole thing under 90 words." },
+      ], "recap");
+      this.panel.post({ type: "chat", text: reply });
+    } catch (e) { this.fail(e); }
+    finally { this.panel.post({ type: "busy", on: false }); }
+  }
+
+  // ---------- quiz: MCQs from what Pica taught + what got built ----------
+  async startQuiz() {
+    this.panel.post({ type: "busy", on: true });
+    try {
+      const material = [
+        this.taughtConcepts.length ? "Concepts taught: " + this.taughtConcepts.join(" · ") : "",
+        this.recentDiffs.length ? "Recent code:\n" + this.recentDiffs.map((d) => d.file + "\n" + d.lines.join("\n")).join("\n") : "",
+      ].filter(Boolean).join("\n\n");
+      if (!material) { this.panel.post({ type: "chat", text: "Let me teach you something first — then I'll quiz you on it 🐾" }); return; }
+      const raw = await hermesChat(this.context, [
+        { role: "system", content: [
+          "You are Pica, a pixel cat quizzing a designer on code concepts they JUST learned. Make exactly 3 multiple-choice questions from the material — designer-friendly wording, about what the code DOES, not syntax trivia.",
+          this.tone === "professor" ? "Tone: professor — precise, no emoji." : "Tone: friend — warm, playful.",
+          'Respond with ONLY this JSON: {"questions":[{"q":"...","options":["a","b","c","d"],"answer":0,"why":"one-line reason"}]} — 4 options each, answer is the index 0-3, keep every string short.',
+        ].join("\n") },
+        { role: "user", content: material.slice(0, 4000) },
+      ], "quiz");
+      const parsed = parseJSONBlock(raw, "questions");
+      const qs = parsed && Array.isArray(parsed.questions)
+        ? parsed.questions.filter((q) => q && q.q && Array.isArray(q.options) && q.options.length >= 2 && Number.isInteger(q.answer)).slice(0, 3)
+        : [];
+      if (!qs.length) { this.panel.post({ type: "chat", text: "My quiz machine jammed — ask me again in a sec 🐾" }); return; }
+      this.quiz = { questions: qs, i: 0, score: 0 };
+      this.panel.post({ type: "quizQ", i: 0, total: qs.length, q: qs[0].q, options: qs[0].options });
+    } catch (e) { this.fail(e); }
+    finally { this.panel.post({ type: "busy", on: false }); }
+  }
+
+  quizPick(pick) {
+    if (!this.quiz) return;
+    const q = this.quiz.questions[this.quiz.i];
+    const ok = pick === q.answer;
+    if (ok) this.quiz.score++;
+    this.quiz.i++;
+    const done = this.quiz.i >= this.quiz.questions.length;
+    this.panel.post({ type: "quizVerdict", ok, why: q.why || "", correct: q.options[q.answer], done, score: this.quiz.score, total: this.quiz.questions.length });
+    if (!done) {
+      const n = this.quiz.questions[this.quiz.i];
+      this.panel.post({ type: "quizQ", i: this.quiz.i, total: this.quiz.questions.length, q: n.q, options: n.options });
+    } else {
+      this.quiz = null;
+    }
+  }
+
+  // ---------- file practice: blank the REAL code in an editor tab ----------
+  async startFilePractice() {
+    this.panel.post({ type: "busy", on: true });
+    try {
+      // prefer the file Pica last taught about; fall back to the active editor
+      let uri = null, rel = "";
+      if (this.lesson && this.lesson.file && vscode.workspace.workspaceFolders) {
+        uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, this.lesson.file);
+        rel = this.lesson.file;
+      }
+      const ed = vscode.window.activeTextEditor;
+      if (!uri && ed && !ed.document.isUntitled) { uri = ed.document.uri; rel = vscode.workspace.asRelativePath(uri); }
+      if (!uri) { this.panel.post({ type: "chat", text: "Open a code file (or let me teach one first) and I'll blank it out for you 🐾" }); return; }
+      let text;
+      try { text = dec.decode(await vscode.workspace.fs.readFile(uri)); }
+      catch (e) { this.panel.post({ type: "chat", text: "I couldn't read " + rel + " — open it and try again." }); return; }
+      text = text.split("\n").slice(0, 200).join("\n");
+
+      const raw = await hermesChat(this.context, [
+        { role: "system", content: [
+          "You pick practice blanks for a designer learning code. From the file below choose up to 3 short, MEANINGFUL tokens to blank out (a method like map, a hook, a key prop, a condition — things worth remembering; never punctuation or variable soup).",
+          'Respond ONLY with JSON: {"blanks":[{"original":"<the EXACT full line copied verbatim from the file>","answer":"<the exact token within that line to hide>","hint":"<=8 words"}]}',
+        ].join("\n") },
+        { role: "user", content: "File: " + rel + "\n" + text.slice(0, 8000) },
+      ], "practice");
+      const parsed = parseJSONBlock(raw, "blanks");
+      const blanks = [];
+      if (parsed && Array.isArray(parsed.blanks)) {
+        for (const b of parsed.blanks.slice(0, 3)) {
+          if (!b || !b.original || !b.answer) continue;
+          if (!text.includes(b.original) || !String(b.original).includes(String(b.answer))) continue;
+          blanks.push({ original: String(b.original), answer: String(b.answer), hint: String(b.hint || "") });
+        }
+      }
+      if (!blanks.length) { this.panel.post({ type: "chat", text: "Hmm, I couldn't find a good blank in " + rel + " — try after the agent writes a bit more 🐾" }); return; }
+
+      let practiceText = text;
+      blanks.forEach((b, i) => {
+        const blankedLine = b.original.replace(b.answer, "____/*" + (i + 1) + "*/");
+        practiceText = practiceText.replace(b.original, blankedLine);
+      });
+      const header = "// PICA PRACTICE — fill every ____/*n*/ blank, then hit “Check my answers” in the Pica panel.\n// (this is a copy — your real file is untouched)\n\n";
+      const langExt = extOf(rel);
+      const langMap = { js: "javascript", jsx: "javascriptreact", ts: "typescript", tsx: "typescriptreact", py: "python", rb: "ruby", go: "go", css: "css", html: "html" };
+      const doc = await vscode.workspace.openTextDocument({ content: header + practiceText, language: langMap[langExt] || "plaintext" });
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.One });
+      this.fp = { docUri: doc.uri.toString(), file: rel, blanks };
+      this.panel.post({ type: "fpReady", file: rel, count: blanks.length, hints: blanks.map((b) => b.hint) });
+    } catch (e) { this.fail(e); }
+    finally { this.panel.post({ type: "busy", on: false }); }
+  }
+
+  checkFilePractice() {
+    if (!this.fp) { this.panel.post({ type: "chat", text: "No practice file open right now — hit “Blank the file” first 🐾" }); return; }
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === this.fp.docUri);
+    if (!doc) { this.panel.post({ type: "chat", text: "I lost the practice tab — start a fresh one 🐾" }); this.fp = null; return; }
+    const now = normAnswer(doc.getText());
+    const items = this.fp.blanks.map((b) => ({ ok: now.includes(normAnswer(b.original)), answer: b.answer, hint: b.hint }));
+    const score = items.filter((x) => x.ok).length;
+    this.panel.post({ type: "fpResult", items, score, total: items.length, file: this.fp.file });
+    if (score === items.length) this.fp = null;   // all done — clean slate
+  }
+
   // ---------- free chat ----------
   async answer(text) {
     if (!text.trim()) return;
@@ -377,7 +558,7 @@ class Engine {
       this.chatHistory.push({ role: "user", content: text });
       this.chatHistory = this.chatHistory.slice(-8);
       const reply = await hermesChat(this.context, [
-        { role: "system", content: chatSystemPrompt(this.tone, this.lastDiffText) },
+        { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
         ...this.chatHistory,
       ], "chat");
       this.chatHistory.push({ role: "assistant", content: reply });
@@ -444,6 +625,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider("pica.panel", panel, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("pica.open", () => vscode.commands.executeCommand("workbench.view.extension.pica")),
     vscode.commands.registerCommand("pica.simulateHermes", simulateHermes),
+    vscode.commands.registerCommand("pica.practiceFile", () => engine.startFilePractice()),
     vscode.commands.registerCommand("pica.setEmail", async () => {
       const email = await vscode.window.showInputBox({ prompt: "The email you signed up with at pica-landing.vercel.app", ignoreFocusOut: true });
       if (email && email.trim()) {

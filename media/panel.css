@@ -23,6 +23,17 @@ img.sprite,#thread img{image-rendering:pixelated}
 .tone{font-family:var(--mono);font-size:9px;padding:3px 6px;background:#2a2320;color:#c9bfb5;border:1px solid #000;cursor:pointer}
 .tone.on{background:var(--orange);color:var(--ink);font-weight:700}
 
+/* tools row */
+.toolsrow{display:flex;gap:5px;padding:6px 8px;background:var(--sky);border-bottom:2px solid var(--dark);flex:0 0 auto;flex-wrap:wrap}
+.tool{font-family:var(--mono);font-size:9.5px;padding:4px 7px;background:var(--paper);color:var(--dark);border:2px solid var(--dark);box-shadow:2px 2px 0 var(--dark);cursor:pointer;line-height:1}
+.tool:active{transform:translate(2px,2px);box-shadow:0 0 0 var(--dark)}
+
+/* quiz options */
+.qopt{display:block;width:100%;text-align:left;font-size:11.5px;background:#fff;color:var(--dark);border:2px solid var(--dark);box-shadow:2px 2px 0 var(--dark);padding:6px 8px;cursor:pointer;margin-top:5px}
+.qopt:disabled{opacity:.55;cursor:default}
+.qopt.right{background:#cfe8c0;border-color:#2f6420}
+.qopt.wrong{background:#f3c9c0;border-color:#7a2a1a}
+
 /* thread */
 #thread{flex:1;overflow-y:auto;background:var(--thread);padding:10px;display:flex;flex-direction:column;gap:8px}
 .msg{max-width:95%;border:2px solid var(--dark);box-shadow:3px 3px 0 var(--dark);padding:7px 9px;background:#fff;

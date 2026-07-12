@@ -117,6 +117,49 @@
         pica(m.ok
           ? "✓ <strong>" + escapeHtml(m.answer) + "</strong> — nailed it. You just wrote the line Hermes would've. " + (m.concept ? "<strong>Unlocked:</strong> " + md(m.concept) : "")
           : "Close! It's <strong>" + escapeHtml(m.answer) + "</strong>. You'll get the next one 🐾 " + (m.concept ? "<strong>Concept:</strong> " + md(m.concept) : ""));
+        // offer a quiz on what was just taught
+        const qb = action("Quiz me on this 🧠", true);
+        qb.addEventListener("click", function () { qb.remove(); vscode.postMessage({ type: "quiz" }); });
+        return;
+      }
+      case "quizQ": {
+        typing(false);
+        pica("<strong>Q" + (m.i + 1) + "/" + m.total + ":</strong> " + md(m.q));
+        const wrap = el('<div class="msg" style="display:block"></div>');
+        m.options.forEach(function (opt, idx) {
+          const b = document.createElement("button");
+          b.className = "qopt"; b.textContent = String.fromCharCode(65 + idx) + ". " + opt;
+          b.addEventListener("click", function () {
+            wrap.querySelectorAll(".qopt").forEach(function (x) { x.disabled = true; });
+            b.classList.add("picked");
+            vscode.postMessage({ type: "quizPick", pick: idx });
+          });
+          wrap.appendChild(b);
+        });
+        thread.appendChild(wrap); scroll();
+        return;
+      }
+      case "quizVerdict": {
+        typing(false);
+        pica((m.ok ? "✓ Correct! " : "Not quite — it's <strong>" + escapeHtml(m.correct) + "</strong>. ") + md(m.why || ""));
+        if (m.done) {
+          pica("<strong>Score: " + m.score + "/" + m.total + "</strong>" + (m.score === m.total ? " — flawless 🐾 You're becoming the developer." : " — every miss is a future win. Want another round later? Hit 🧠 Quiz."));
+        }
+        return;
+      }
+      case "fpReady": {
+        typing(false);
+        pica("I blanked <strong>" + m.count + "</strong> spot" + (m.count > 1 ? "s" : "") + " in a practice copy of <code>" + escapeHtml(m.file) + "</code> — it's open in your editor. Fill every <code>____</code>, then hit <strong>✓ Check</strong> up top.");
+        if (m.hints && m.hints.filter(Boolean).length) pica("<strong>Hints:</strong> " + m.hints.filter(Boolean).map(function (h, i) { return (i + 1) + ") " + escapeHtml(h); }).join(" · "));
+        return;
+      }
+      case "fpResult": {
+        typing(false);
+        const lines = m.items.map(function (it, i) {
+          return (it.ok ? "✓" : "✗") + " blank " + (i + 1) + (it.ok ? "" : " — answer: <code>" + escapeHtml(it.answer) + "</code>");
+        }).join("<br/>");
+        pica(lines + "<br/><strong>" + m.score + "/" + m.total + "</strong>" +
+          (m.score === m.total ? " — you just rewrote real lines of <code>" + escapeHtml(m.file) + "</code> yourself 🐾" : " — fix the ✗ ones and hit ✓ Check again."));
         return;
       }
       case "chat": { typing(false); pica(md(m.text)); return; }
@@ -136,6 +179,8 @@
   }
   sendBt.addEventListener("click", ask);
   askInp.addEventListener("keydown", function (e) { if (e.key === "Enter") ask(); });
+  function tool(id, type) { const b = document.getElementById(id); if (b) b.addEventListener("click", function () { typing(true); vscode.postMessage({ type: type }); }); }
+  tool("t-recap", "recap"); tool("t-quiz", "quiz"); tool("t-fp", "filePractice"); tool("t-fpcheck", "fileCheck");
   document.querySelectorAll(".tone").forEach(function (b) {
     b.addEventListener("click", function () {
       state.tone = b.dataset.tone; markTone();
