@@ -7,7 +7,7 @@
   const sendBt = document.getElementById("send");
   const AV = '<img class="av" src="' + window.PICA_SPRITE + '"/>';
 
-  let state = { hasKey: false, allowed: false, tone: "friend", hasWorkspace: true, portal: "#" };
+  let state = { authed: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#" };
   let typingEl = null;
 
   // ---------- helpers ----------
@@ -32,16 +32,17 @@
   }
 
   // ---------- states ----------
-  function showNeedKey() {
-    setStatus("needs a key");
-    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. First I need your <strong>OpenRouter key</strong> so I can think (it runs my Hermes brain).");
-    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="paste your OpenRouter key (sk-or-…)"/><div style="height:6px"></div><a class="k-link" href="' + state.portal + '">get one → openrouter.ai/keys</a></div>');
+  function showNeedEmail() {
+    setStatus("who are you? 🐾");
+    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. What's the <strong>email you signed up with</strong>? That's your key to me.");
+    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="emin" type="email" placeholder="you@studio.com"/><div style="height:6px"></div><a class="k-link" href="' + state.landing + '">not signed up yet? → pica-landing.vercel.app</a></div>');
     thread.appendChild(wrap);
-    const saveB = action("Save key");
-    const inp = wrap.querySelector("#keyin");
-    function save() { if (inp.value.trim()) vscode.postMessage({ type: "saveKey", key: inp.value }); }
+    const saveB = action("That's me");
+    const inp = wrap.querySelector("#emin");
+    function save() { if (inp.value.trim()) vscode.postMessage({ type: "saveEmail", email: inp.value }); }
     saveB.addEventListener("click", save);
     inp.addEventListener("keydown", function (e) { if (e.key === "Enter") save(); });
+    inp.focus();
     scroll();
   }
 
@@ -66,14 +67,14 @@
       case "init": {
         state = m.state; markTone();
         thread.innerHTML = "";
-        if (!state.hasKey) return showNeedKey();
+        if (!state.authed) return showNeedEmail();
         if (!state.allowed) return showZero();
         setStatus("watching your code");
         pica("Back on duty 🐾 I'm watching what Hermes writes. Ask me anything, anytime.");
         sys("run “Pica: Simulate a Hermes Edit” to demo the loop");
         return;
       }
-      case "needKey": thread.innerHTML = ""; return showNeedKey();
+      case "needEmail": thread.innerHTML = ""; return showNeedEmail();
       case "status": setStatus(m.text); return;
       case "busy": typing(!!m.on); return;
       case "error": typing(false); err(m.text); return;

@@ -10,7 +10,9 @@
 const vscode = require("vscode");
 
 const CONFIG = {
-  API_BASE: "https://openrouter.ai/api/v1",   // OpenRouter — serves the same Hermes 4 models
+  PROXY_BASE: "https://doting-cuttlefish-341.convex.site", // Pica backend: verifies signup email, proxies Hermes
+  LANDING: "https://pica-landing.vercel.app",
+  API_BASE: "https://openrouter.ai/api/v1",   // dev fallback — used only if a local key is stored
   DEFAULT_MODEL: "nousresearch/hermes-4-70b",
   DEBOUNCE_MS: 1400,     // let an agent write-burst settle before teaching
   COOLDOWN_MS: 15000,    // min gap between proactive teach moments
@@ -45,27 +47,59 @@ function normAnswer(s) {
 // ---------------------------------------------------------------------
 // Hermes (Nous) API
 // ---------------------------------------------------------------------
-async function hermesChat(context, messages) {
+async function hermesChat(context, messages, kind) {
+  // Dev fallback: a locally-stored OpenRouter key talks to OpenRouter directly.
   const key = await context.secrets.get("pica.nousKey");
-  if (!key) throw new Error("NO_KEY");
-  const model = vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
-  const res = await fetch(CONFIG.API_BASE + "/chat/completions", {
+  if (key) {
+    const model = vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
+    const res = await fetch(CONFIG.API_BASE + "/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + key,
+        "HTTP-Referer": CONFIG.LANDING,
+        "X-Title": "Pica",
+      },
+      body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 900 }),
+    });
+    if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
+    if (!res.ok) throw new Error("API_" + res.status + " " + (await res.text()).slice(0, 200));
+    const data = await res.json();
+    const text = data && data.choices && data.choices[0] && data.choices[0].message
+      ? (data.choices[0].message.content || "") : "";
+    if (!text) throw new Error("EMPTY_REPLY");
+    return text.trim();
+  }
+
+  // Normal path: the user's signup email is the license; our backend holds the key.
+  const email = context.globalState.get("pica.email");
+  if (!email) throw new Error("NEED_EMAIL");
+  const res = await fetch(CONFIG.PROXY_BASE + "/pica/chat", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + key,
-      "HTTP-Referer": "https://pica-landing.vercel.app",   // OpenRouter attribution headers
-      "X-Title": "Pica",
-    },
-    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 900 }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, messages, kind: kind || "chat" }),
   });
-  if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
-  if (!res.ok) throw new Error("API_" + res.status + " " + (await res.text()).slice(0, 200));
+  if (res.status === 403) throw new Error("NOT_SIGNED_UP");
+  if (res.status === 429) throw new Error("DAILY_LIMIT");
+  if (!res.ok) {
+    let err = ""; try { err = (await res.json()).error || ""; } catch (e) { /* ignore */ }
+    if (err === "server_not_configured") throw new Error("SERVER_SETUP");
+    throw new Error("API_" + res.status + " " + err);
+  }
   const data = await res.json();
-  const text = data && data.choices && data.choices[0] && data.choices[0].message
-    ? (data.choices[0].message.content || "") : "";
-  if (!text) throw new Error("EMPTY_REPLY");
-  return text.trim();
+  if (!data.reply) throw new Error("EMPTY_REPLY");
+  return String(data.reply).trim();
+}
+
+async function verifyEmail(email) {
+  const res = await fetch(CONFIG.PROXY_BASE + "/pica/auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) return false;
+  const data = await res.json().catch(() => ({}));
+  return !!data.ok;
 }
 
 function parseLessonJSON(text) {
@@ -198,18 +232,23 @@ class Engine {
   set tone(v) { this.context.globalState.update("pica.tone", v); }
   get allowed() { return this.context.workspaceState.get("pica.allowed", false); }
   set allowed(v) { this.context.workspaceState.update("pica.allowed", v); }
+  get email() { return this.context.globalState.get("pica.email", ""); }
 
-  async hasKey() { return !!(await this.context.secrets.get("pica.nousKey")); }
+  async authed() { return !!this.email || !!(await this.context.secrets.get("pica.nousKey")); }
 
   // ---------- panel protocol ----------
   async onPanelMessage(m) {
     try {
       switch (m.type) {
         case "ready":     return this.sendInit();
-        case "saveKey": {
-          const key = String(m.key || "").trim();
-          if (key.length < 8) return this.panel.post({ type: "error", text: "That key looks too short — paste the whole thing." });
-          await this.context.secrets.store("pica.nousKey", key);
+        case "saveEmail": {
+          const email = String(m.email || "").trim().toLowerCase();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return this.panel.post({ type: "error", text: "That email looks off — mind checking it?" });
+          this.panel.post({ type: "busy", on: true });
+          const ok = await verifyEmail(email);
+          this.panel.post({ type: "busy", on: false });
+          if (!ok) return this.panel.post({ type: "error", text: "I don't see that email on the list yet — grab your spot at " + CONFIG.LANDING + " first, then try again 🐾" });
+          await this.context.globalState.update("pica.email", email);
           return this.sendInit();
         }
         case "tone":      this.tone = m.tone === "professor" ? "professor" : "friend"; return;
@@ -226,20 +265,24 @@ class Engine {
     this.panel.post({
       type: "init",
       state: {
-        hasKey: await this.hasKey(),
+        authed: await this.authed(),
+        email: this.email,
         allowed: this.allowed,
         tone: this.tone,
         hasWorkspace: !!(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length),
-        portal: CONFIG.PORTAL_URL,
+        landing: CONFIG.LANDING,
       },
     });
-    if (this.allowed && (await this.hasKey())) this.startWatching();
+    if (this.allowed && (await this.authed())) this.startWatching();
   }
 
   fail(e) {
     const msg = String((e && e.message) || e);
-    if (msg === "NO_KEY")  return this.panel.post({ type: "needKey" });
-    if (msg === "BAD_KEY") return this.panel.post({ type: "error", text: "That key didn't work (401). Check your OpenRouter key (openrouter.ai/keys) and paste it again via “Pica: Set API Key”." });
+    if (msg === "NEED_EMAIL")    return this.panel.post({ type: "needEmail" });
+    if (msg === "NOT_SIGNED_UP") return this.panel.post({ type: "error", text: "That email isn't on the list anymore — sign up at " + CONFIG.LANDING + " and I'll wake right up 🐾" });
+    if (msg === "DAILY_LIMIT")   return this.panel.post({ type: "error", text: "You've hit today's free limit — impressive! More unlocks tomorrow 🐾" });
+    if (msg === "SERVER_SETUP")  return this.panel.post({ type: "error", text: "Pica's brain isn't switched on yet (server key missing). Ping the Pica team." });
+    if (msg === "BAD_KEY")       return this.panel.post({ type: "error", text: "That local key didn't work (401). Re-set it via “Pica: Set API Key”, or remove it to use your signup email instead." });
     this.panel.post({ type: "error", text: "Hermes hiccupped: " + msg.slice(0, 140) });
   }
 
@@ -307,7 +350,7 @@ class Engine {
       const raw = await hermesChat(this.context, [
         { role: "system", content: teachSystemPrompt(this.tone) },
         { role: "user", content: diffText },
-      ]);
+      ], "lesson");
       lesson = parseLessonJSON(raw);
       if (!lesson) lesson = { teaser: "Hermes just wrote something worth knowing — want the short version?", explanation: raw.slice(0, 600), concept: "", practice: null };
     } catch (e) { this.panel.post({ type: "spotfail" }); return this.fail(e); }
@@ -336,7 +379,7 @@ class Engine {
       const reply = await hermesChat(this.context, [
         { role: "system", content: chatSystemPrompt(this.tone, this.lastDiffText) },
         ...this.chatHistory,
-      ]);
+      ], "chat");
       this.chatHistory.push({ role: "assistant", content: reply });
       this.panel.post({ type: "chat", text: reply });
     } catch (e) { this.fail(e); }
@@ -401,6 +444,18 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider("pica.panel", panel, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("pica.open", () => vscode.commands.executeCommand("workbench.view.extension.pica")),
     vscode.commands.registerCommand("pica.simulateHermes", simulateHermes),
+    vscode.commands.registerCommand("pica.setEmail", async () => {
+      const email = await vscode.window.showInputBox({ prompt: "The email you signed up with at pica-landing.vercel.app", ignoreFocusOut: true });
+      if (email && email.trim()) {
+        if (await verifyEmail(email.trim().toLowerCase())) {
+          await context.globalState.update("pica.email", email.trim().toLowerCase());
+          vscode.window.showInformationMessage("Pica: welcome back 🐾");
+        } else {
+          vscode.window.showWarningMessage("Pica: that email isn't on the list — sign up at pica-landing.vercel.app first.");
+        }
+        engine.sendInit();
+      }
+    }),
     vscode.commands.registerCommand("pica.setApiKey", async () => {
       const key = await vscode.window.showInputBox({ prompt: "Paste your OpenRouter API key (openrouter.ai/keys)", password: true, ignoreFocusOut: true });
       if (key && key.trim()) {
