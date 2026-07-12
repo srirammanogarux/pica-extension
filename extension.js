@@ -240,7 +240,9 @@ class Engine {
   contextBlock() {
     const parts = [];
     if (this.workspaceBrief) parts.push(this.workspaceBrief);
-    const ed = vscode.window.activeTextEditor;
+    // chat panels steal focus → activeTextEditor is often undefined; fall back to any visible editor
+    const ed = vscode.window.activeTextEditor ||
+      (vscode.window.visibleTextEditors || []).find((e) => e.document && !e.document.isUntitled);
     if (ed && ed.document && !ed.document.isUntitled) {
       const rel = vscode.workspace.asRelativePath(ed.document.uri);
       const sel = ed.selection && !ed.selection.isEmpty ? ed.document.getText(ed.selection) : "";
@@ -316,6 +318,7 @@ class Engine {
   }
 
   async sendInit() {
+    this.buildWorkspaceBrief();   // project context available even before watching starts
     this.panel.post({
       type: "init",
       state: {
@@ -433,6 +436,11 @@ class Engine {
   async recap() {
     this.panel.post({ type: "busy", on: true });
     try {
+      if (!vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) {
+        this.panel.post({ type: "chat", text: "I can't see a project yet — **File → Open Folder…** and pick the folder you're building in. Then I can watch what Claude/Hermes writes there 🐾" });
+        return;
+      }
+      if (!this.workspaceBrief) await this.buildWorkspaceBrief();
       const ctx = this.contextBlock();
       if (!ctx) { this.panel.post({ type: "chat", text: "Nothing to recap yet — build something (or run a simulated Hermes edit) and ask me again 🐾" }); return; }
       const reply = await hermesChat(this.context, [
