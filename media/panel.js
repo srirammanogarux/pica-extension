@@ -7,7 +7,7 @@
   const sendBt = document.getElementById("send");
   const AV = '<img class="av" src="' + window.PICA_SPRITE + '"/>';
 
-  let state = { authed: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#" };
+  let state = { hasEmail: false, hasKey: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#" };
   let typingEl = null;
 
   // ---------- helpers ----------
@@ -32,9 +32,23 @@
   }
 
   // ---------- states ----------
+  function showNeedKey() {
+    setStatus("step 2 of 2 — your key");
+    pica("Almost in 🐾 Last step: paste <strong>your own OpenRouter key</strong>. It powers my brain, gets stored <strong>only on this machine</strong>, and your usage bills to you — never to anyone else.");
+    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="sk-or-…"/><div style="height:6px"></div><a class="k-link" href="https://openrouter.ai/keys">get a key → openrouter.ai/keys (free credits to start)</a></div>');
+    thread.appendChild(wrap);
+    const saveB = action("Save my key");
+    const inp = wrap.querySelector("#keyin");
+    function save() { if (inp.value.trim()) vscode.postMessage({ type: "saveKey", key: inp.value }); }
+    saveB.addEventListener("click", save);
+    inp.addEventListener("keydown", function (e) { if (e.key === "Enter") save(); });
+    inp.focus();
+    scroll();
+  }
+
   function showNeedEmail() {
-    setStatus("who are you? 🐾");
-    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. What's the <strong>email you signed up with</strong>? That's your key to me.");
+    setStatus("step 1 of 2 — who are you?");
+    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. First: what's the <strong>email you signed up with</strong>?");
     const wrap = el('<div class="msg" style="display:block"><input class="inp" id="emin" type="email" placeholder="you@studio.com"/><div style="height:6px"></div><a class="k-link" href="' + state.landing + '">not signed up yet? → pica-landing.vercel.app</a></div>');
     thread.appendChild(wrap);
     const saveB = action("That's me");
@@ -67,7 +81,8 @@
       case "init": {
         state = m.state; markTone();
         thread.innerHTML = "";
-        if (!state.authed) return showNeedEmail();
+        if (!state.hasEmail) return showNeedEmail();
+        if (!state.hasKey) return showNeedKey();
         if (!state.allowed) return showZero();
         setStatus("watching your code");
         pica("Back on duty 🐾 I'm watching what Hermes writes. Ask me anything, anytime.");
@@ -75,6 +90,7 @@
         return;
       }
       case "needEmail": thread.innerHTML = ""; return showNeedEmail();
+      case "needKey": thread.innerHTML = ""; return showNeedKey();
       case "status": setStatus(m.text); return;
       case "busy": typing(!!m.on); return;
       case "error": typing(false); err(m.text); return;
