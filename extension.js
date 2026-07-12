@@ -312,6 +312,7 @@ class Engine {
         case "quizPick":  return this.quizPick(Number(m.pick));
         case "filePractice": return this.startFilePractice();
         case "fileCheck": return this.checkFilePractice();
+        case "game":      return this.arcade ? this.arcade.start(m.mode === "code" ? "code" : "mcq") : null;
         case "simulate":  return vscode.commands.executeCommand("pica.simulateHermes");
       }
     } catch (e) { this.fail(e); }
@@ -578,6 +579,124 @@ class Engine {
 }
 
 // ---------------------------------------------------------------------
+// ARCADE — Game Mode tab: progress on top, hearts as lives, game scene
+// above, question below. Games picked at random from what's built.
+// ---------------------------------------------------------------------
+const BUILT_GAMES = ["bugzap"]; // grows as games ship: snake, merge, builder…
+
+class Arcade {
+  constructor(context, engine) { this.context = context; this.engine = engine; this.panel = null; }
+
+  async start(mode) {
+    const eng = this.engine;
+    if (!eng.lesson) { eng.panel.post({ type: "chat", text: "Let me teach you something first — then we play 🐾 (build something, or run a simulated Hermes edit)" }); return; }
+    eng.panel.post({ type: "busy", on: true });
+    let questions = [];
+    try {
+      questions = await this.generateQuestions(mode);
+    } catch (e) { eng.panel.post({ type: "busy", on: false }); return eng.fail(e); }
+    eng.panel.post({ type: "busy", on: false });
+    if (questions.length < 3) { eng.panel.post({ type: "chat", text: "My question machine jammed — try again in a sec 🐾" }); return; }
+
+    const gameId = BUILT_GAMES[Math.floor(Math.random() * BUILT_GAMES.length)];
+    const hiscores = this.context.globalState.get("pica.hiscores", {});
+    const payload = {
+      game: gameId, mode,
+      concept: (eng.lesson && eng.lesson.concept) || "",
+      questions: questions.slice(0, 5),
+      hiscore: hiscores[gameId] || 0,
+    };
+
+    if (this.panel) { try { this.panel.dispose(); } catch (e) { /* already gone */ } }
+    this.panel = vscode.window.createWebviewPanel("picaArcade", "Pica — Game Mode", vscode.ViewColumn.One, {
+      enableScripts: true, retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")],
+    });
+    this.panel.webview.html = this.html(this.panel.webview, payload);
+    this.panel.onDidDispose(() => { this.panel = null; });
+    this.panel.webview.onDidReceiveMessage((m) => {
+      if (m.type === "done") {
+        const hs = this.context.globalState.get("pica.hiscores", {});
+        if ((m.score || 0) > (hs[m.game] || 0)) { hs[m.game] = m.score; this.context.globalState.update("pica.hiscores", hs); }
+        logEvent(this.context, "game", 0);
+        const names = { bugzap: "Bug Zapper" };
+        eng.panel.post({ type: "chat", text: "🎮 **" + (names[m.game] || m.game) + "**: " + m.score + " pts · " + m.correct + "/" + m.total + " right · best combo ×" + Math.max(m.bestCombo, 1) + (m.won ? ". That concept is settling in 🐾" : ". The bugs got you this time — rematch anytime 🐾") });
+      }
+      if (m.type === "back") {
+        if (this.panel) this.panel.dispose();
+        vscode.commands.executeCommand("workbench.view.extension.pica");
+      }
+    });
+  }
+
+  async generateQuestions(mode) {
+    const eng = this.engine;
+    const material = [
+      "Lesson just taught — concept: " + (eng.lesson.concept || "") + "\nExplanation: " + (eng.lesson.explanation || ""),
+      eng.recentDiffs.length ? "Recent code from THEIR project:\n" + eng.recentDiffs.map((d) => d.file + "\n" + d.lines.join("\n")).join("\n") : "",
+    ].filter(Boolean).join("\n\n").slice(0, 4000);
+    const spec = mode === "code"
+      ? 'Each question: {"type":"code","prompt":"one-line instruction","display":"1-2 REAL code lines from the material with ONE key token replaced by ____","answer":"the exact missing token","why":"one-line reason"}. The answer must be short and typeable.'
+      : 'Each question: {"type":"mcq","q":"designer-friendly question about what the code DOES","options":["a","b","c","d"],"answer":0,"why":"one-line reason"}. Exactly 4 options, answer is the index 0-3.';
+    const raw = await hermesChat(this.context, [
+      { role: "system", content: [
+        "You are Pica, generating a 5-question game round for a designer who just learned a coding concept. Questions must be about the material below — what the code does for the product, never syntax trivia. Ramp difficulty: Q1 easiest, Q5 hardest. Keep every string short.",
+        spec,
+        'Respond with ONLY this JSON, no fences: {"questions":[ ...exactly 5... ]}',
+      ].join("\n") },
+      { role: "user", content: material },
+    ], "game");
+    const parsed = parseJSONBlock(raw, "questions");
+    const out = [];
+    if (parsed && Array.isArray(parsed.questions)) {
+      for (const q of parsed.questions) {
+        if (!q) continue;
+        if (q.type === "mcq" && q.q && Array.isArray(q.options) && q.options.length === 4 && Number.isInteger(q.answer) && q.answer >= 0 && q.answer < 4) out.push(q);
+        else if (q.type === "code" && q.display && q.answer && String(q.display).includes("____")) out.push(q);
+      }
+    }
+    return out;
+  }
+
+  html(wv, payload) {
+    const uri = (f) => wv.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
+    const nonce = Math.random().toString(36).slice(2);
+    const data = JSON.stringify(payload).replace(/</g, "\\u003c");
+    return `<!doctype html><html><head><meta charset="utf-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${wv.cspSource}; style-src ${wv.cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';"/>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link href="${uri("arcade.css")}" rel="stylesheet"/>
+</head><body>
+<div class="stage">
+  <div class="hud">
+    <span class="hud__title" id="hud-title">GAME MODE</span>
+    <div class="progress" id="progress"></div>
+    <div class="hearts" id="hearts"></div>
+    <span class="score-pill" id="score">0 pts</span>
+  </div>
+  <div class="scene">
+    <canvas id="scene-canvas" width="720" height="235"></canvas>
+    <span class="scene__label" id="scene-label"></span>
+    <span class="combo-pop" id="combo-pop"></span>
+  </div>
+  <div class="hud" style="justify-content:flex-start"><span class="scene__label" style="position:static" id="concept"></span></div>
+  <div class="qwrap"><div class="qcard" id="qcard"></div></div>
+</div>
+<div class="overlay" id="overlay"><div class="endcard">
+  <img src="${uri("pica.png")}" width="56" height="56"/>
+  <div class="endcard__title">GREAT JOB!</div>
+  <div class="endcard__score">0</div>
+  <div class="endcard__hi"></div>
+  <div class="endcard__stats"><span id="st-correct"></span><span id="st-combo"></span></div>
+  <button class="btn" id="back">Back to Pica 🐾</button>
+</div></div>
+<script nonce="${nonce}">window.PICA_ROUND=${data};</script>
+<script nonce="${nonce}" src="${uri("arcade.js")}"></script>
+</body></html>`;
+  }
+}
+
+// ---------------------------------------------------------------------
 // Simulate a Hermes edit — writes a realistic change into the workspace
 // so the full loop can be demoed without the live agent.
 // ---------------------------------------------------------------------
@@ -629,6 +748,7 @@ function activate(context) {
   const panel = new PicaPanel(context, null);
   const engine = new Engine(context, panel);
   panel.engine = engine;
+  engine.arcade = new Arcade(context, engine);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("pica.panel", panel, { webviewOptions: { retainContextWhenHidden: true } }),

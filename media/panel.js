@@ -111,22 +111,14 @@
         if (!m.data) return;
         pica(md(m.data.explanation));
         if (m.data.concept) pica("<strong>Concept:</strong> " + md(m.data.concept));
-        if (m.data.practice && m.data.practice.display && m.data.practice.answer) {
-          const p = action("Let me try it ✍️");
-          p.addEventListener("click", function () {
-            p.remove();
-            pica(md(m.data.practice.prompt || "Fill in the blank:"));
-            codeBlock(m.data.practice.display);
-            const wrap = el('<div class="msg" style="display:block"><input class="inp" id="prin" placeholder="type the missing bit…" autocomplete="off"/></div>');
-            thread.appendChild(wrap);
-            const inp = wrap.querySelector("#prin");
-            const go = action("Check");
-            function submit() { if (inp.value.trim()) { go.remove(); vscode.postMessage({ type: "practiceSubmit", answer: inp.value }); } }
-            go.addEventListener("click", submit);
-            inp.addEventListener("keydown", function (e) { if (e.key === "Enter") submit(); });
-            inp.focus(); scroll();
-          });
-        }
+        pica("Want to own it? Pick your game 🎮");
+        const row = el('<div class="row"></div>');
+        const bMcq = el('<button class="act">🎮 Practice — MCQ</button>');
+        const bCode = el('<button class="act act--ghost">🎮 Practice — Code</button>');
+        bMcq.addEventListener("click", function () { typing(true); vscode.postMessage({ type: "game", mode: "mcq" }); });
+        bCode.addEventListener("click", function () { typing(true); vscode.postMessage({ type: "game", mode: "code" }); });
+        row.appendChild(bMcq); row.appendChild(bCode);
+        thread.appendChild(row); scroll();
         return;
       }
       case "practiceResult": {
