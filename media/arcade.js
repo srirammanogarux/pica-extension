@@ -325,8 +325,100 @@
     },
   };
 
+  // ================= GAME: BYTE SNAKE =================
+  // A pixel snake wanders the scene. Correct = a glowing byte appears and it
+  // slithers over to eat it (+2 segments). Wrong = it shrinks. Length = glory.
+  const snake = {
+    label: "BYTE SNAKE — feed it right answers, watch it grow",
+    segs: [], dir: 0, byte: null, sparks: [], hurtT: 0, cellSize: 9, spacing: 9,
+    init() {
+      this.segs = [];
+      const y = canvas.height / 2;
+      for (let i = 0; i < 6; i++) this.segs.push({ x: canvas.width / 2 - i * this.spacing, y });
+      this.dir = 0;
+    },
+    newQuestion() { if (!this.segs.length) this.init(); },
+    onCorrect() {
+      // spawn a byte somewhere roomy; the snake will seek it
+      const m = 46;
+      let bx, by, tries = 0;
+      do {
+        bx = m + Math.random() * (canvas.width - m * 2);
+        by = m + Math.random() * (canvas.height - m * 2);
+        tries++;
+      } while (tries < 10 && Math.hypot(bx - this.segs[0].x, by - this.segs[0].y) < 90);
+      this.byte = { x: bx, y: by, born: performance.now() };
+    },
+    onWrong() {
+      this.hurtT = performance.now();
+      this.segs.splice(Math.max(3, this.segs.length - 2));   // shrink by 2, keep ≥3
+    },
+    chomp() {
+      tone(300, 0, .05); tone(520, .05, .07); tone(760, .11, .09);
+      for (let i = 0; i < 12; i++) this.sparks.push({ x: this.byte.x, y: this.byte.y, vx: (Math.random() - .5) * 3.4, vy: (Math.random() - .9) * 3.4, life: 24, c: Math.random() < .5 ? "#F5E663" : "#E8823C" });
+      for (let g = 0; g < 2; g++) { const t = this.segs[this.segs.length - 1]; this.segs.push({ x: t.x, y: t.y }); }
+      this.byte = null;
+    },
+    tick() {
+      ctx.fillStyle = "#1A1614"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // faint dot grid for depth
+      ctx.fillStyle = "#242019";
+      for (let gy = 14; gy < canvas.height; gy += 26) for (let gx = 14; gx < canvas.width; gx += 26) ctx.fillRect(gx, gy, 2, 2);
+      if (!this.segs.length) this.init();
+      const head = this.segs[0], now = performance.now();
+      // steering: seek the byte, else wander; always avoid walls
+      let want = this.dir;
+      if (this.byte) want = Math.atan2(this.byte.y - head.y, this.byte.x - head.x);
+      else {
+        want = this.dir + (Math.random() - .5) * .22;
+        const m = 34;
+        if (head.x < m || head.x > canvas.width - m || head.y < m || head.y > canvas.height - m) {
+          want = Math.atan2(canvas.height / 2 - head.y, canvas.width / 2 - head.x);
+        }
+      }
+      let d = want - this.dir;
+      while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      this.dir += Math.max(-.14, Math.min(.14, d));
+      const speed = this.byte ? 2.6 : 1.5;
+      head.x += Math.cos(this.dir) * speed; head.y += Math.sin(this.dir) * speed;
+      // segments follow the leader at fixed spacing
+      for (let i = 1; i < this.segs.length; i++) {
+        const a = this.segs[i], b = this.segs[i - 1];
+        const dist = Math.hypot(b.x - a.x, b.y - a.y);
+        if (dist > this.spacing) { const k = (dist - this.spacing) / dist; a.x += (b.x - a.x) * k; a.y += (b.y - a.y) * k; }
+      }
+      // eat
+      if (this.byte && Math.hypot(this.byte.x - head.x, this.byte.y - head.y) < 12) this.chomp();
+      // draw byte (pulsing)
+      if (this.byte) {
+        const p = 1 + Math.sin((now - this.byte.born) / 120) * .25;
+        ctx.fillStyle = "#F5E663"; const s = 9 * p;
+        ctx.fillRect(this.byte.x - s / 2, this.byte.y - s / 2, s, s);
+        ctx.strokeStyle = "rgba(245,230,99,.35)"; ctx.strokeRect(this.byte.x - s, this.byte.y - s, s * 2, s * 2);
+      }
+      // draw snake tail→head, alternating greens; red flash when hurt
+      const hurt = now - this.hurtT < 350;
+      for (let i = this.segs.length - 1; i >= 0; i--) {
+        const s = this.segs[i], c = this.cellSize;
+        ctx.fillStyle = hurt && (Math.floor(now / 70) % 2) ? "#D9503F" : (i === 0 ? "#8fd460" : i % 2 ? "#5E9E45" : "#4c8639");
+        ctx.fillRect(Math.round(s.x - c / 2), Math.round(s.y - c / 2), c, c);
+      }
+      // eyes on the head
+      const ex = Math.cos(this.dir) * 2.4, ey = Math.sin(this.dir) * 2.4;
+      ctx.fillStyle = "#1A1614";
+      ctx.fillRect(Math.round(head.x - 3 + ex), Math.round(head.y - 3 + ey), 2, 2);
+      ctx.fillRect(Math.round(head.x + 1 + ex), Math.round(head.y + 1 + ey), 2, 2);
+      // length badge
+      ctx.fillStyle = "#7d6f63"; ctx.font = "10px monospace";
+      ctx.fillText("length " + this.segs.length, canvas.width - 74, canvas.height - 10);
+      // sparks
+      this.sparks = this.sparks.filter((s) => s.life-- > 0);
+      this.sparks.forEach((s) => { s.x += s.vx; s.y += s.vy; s.vy += .1; ctx.fillStyle = s.c; ctx.fillRect(s.x, s.y, 3, 3); });
+    },
+  };
+
   // ---------------- game registry + loop ----------------
-  const GAMES = { bugzap, pixelbuilder };
+  const GAMES = { bugzap, pixelbuilder, snake };
   const game = GAMES[R.game] || bugzap;
   document.getElementById("scene-label").textContent = game.label;
   document.getElementById("hud-title").textContent = "GAME MODE";

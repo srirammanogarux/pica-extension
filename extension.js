@@ -582,8 +582,8 @@ class Engine {
 // ARCADE — Game Mode tab: progress on top, hearts as lives, game scene
 // above, question below. Games picked at random from what's built.
 // ---------------------------------------------------------------------
-const BUILT_GAMES = ["bugzap", "pixelbuilder"]; // grows as games ship: snake, merge, fish, match, boss
-const GAME_NAMES = { bugzap: "Bug Zapper", pixelbuilder: "Pixel Builder" };
+const BUILT_GAMES = ["bugzap", "pixelbuilder", "snake"];
+const GAME_NAMES = { bugzap: "Bug Zapper", pixelbuilder: "Pixel Builder", snake: "Byte Snake" };
 
 class Arcade {
   constructor(context, engine) { this.context = context; this.engine = engine; this.panel = null; }
