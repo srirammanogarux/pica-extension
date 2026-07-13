@@ -10,6 +10,17 @@
   let state = { hasEmail: false, hasKey: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#" };
   let typingEl = null;
 
+  // animated header cat — idle by default, thinks while busy, cheers on a win
+  const CATS = window.PICA_CATS || {};
+  const headcat = document.getElementById("headcat");
+  let cheerTimer = null;
+  function setCat(kind) { if (headcat && CATS[kind]) headcat.src = CATS[kind]; }
+  function cheer(ms) {
+    if (!headcat) return;
+    clearTimeout(cheerTimer); setCat("cheer");
+    cheerTimer = setTimeout(function () { setCat("idle"); cheerTimer = null; }, ms || 2600);
+  }
+
   // ---------- helpers ----------
   function scroll() { thread.scrollTop = thread.scrollHeight; }
   function el(html) { const d = document.createElement("div"); d.innerHTML = html; return d.firstElementChild; }
@@ -92,7 +103,7 @@
       case "needEmail": thread.innerHTML = ""; return showNeedEmail();
       case "needKey": thread.innerHTML = ""; return showNeedKey();
       case "status": setStatus(m.text); return;
-      case "busy": typing(!!m.on); return;
+      case "busy": typing(!!m.on); if (headcat && !cheerTimer) setCat(m.on ? "think" : "idle"); return;
       case "error": typing(false); err(m.text); return;
       case "spotted": {
         sys("👀 Hermes touched " + m.file);
@@ -122,6 +133,7 @@
         return;
       }
       case "practiceResult": {
+        if (m.ok) cheer();
         pica(m.ok
           ? "✓ <strong>" + escapeHtml(m.answer) + "</strong> — nailed it. You just wrote the line Hermes would've. " + (m.concept ? "<strong>Unlocked:</strong> " + md(m.concept) : "")
           : "Close! It's <strong>" + escapeHtml(m.answer) + "</strong>. You'll get the next one 🐾 " + (m.concept ? "<strong>Concept:</strong> " + md(m.concept) : ""));

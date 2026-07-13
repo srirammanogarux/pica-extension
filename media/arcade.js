@@ -135,6 +135,9 @@
     const beat = S.score > (R.hiscore || 0);
     vscode.postMessage({ type: "done", game: R.game, score: S.score, correct: S.correct, total: TOTAL, bestCombo: S.bestCombo, won });
     const ov = document.getElementById("overlay");
+    const CATS = window.PICA_CATS || {};
+    const endcat = document.getElementById("endcat");
+    if (endcat) endcat.src = won ? (CATS.cheer || endcat.src) : (CATS.encourage || endcat.src);
     ov.querySelector(".endcard__title").textContent = won ? (S.correct === TOTAL ? "FLAWLESS!" : "GREAT JOB!") : "OUT OF LIVES!";
     ov.querySelector(".endcard__hi").textContent = beat ? "★ NEW HIGH SCORE ★" : "high score: " + Math.max(R.hiscore || 0, S.score);
     ov.querySelector(".endcard__hi").classList.toggle("beat", beat);

@@ -190,7 +190,7 @@ class PicaPanel {
 <link href="${uri("panel.css")}" rel="stylesheet"/>
 </head><body>
 <header class="head">
-  <img class="sprite" src="${uri("pica.png")}" width="26" height="26"/>
+  <img class="sprite headcat" id="headcat" src="${uri("cat-idle.webp")}" width="34" height="34"/>
   <div class="head__t"><strong>Pica</strong><span id="status">waking up…</span></div>
   <div class="tones" id="tones" title="Teaching tone">
     <button data-tone="friend" class="tone">Friend</button>
@@ -208,7 +208,7 @@ class PicaPanel {
   <input id="ask" type="text" placeholder="Ask Pica anything…" autocomplete="off"/>
   <button id="send">➤</button>
 </footer>
-<script nonce="${nonce}">window.PICA_SPRITE="${uri("pica.png")}";</script>
+<script nonce="${nonce}">window.PICA_SPRITE="${uri("pica.png")}";window.PICA_CATS={idle:"${uri("cat-idle.webp")}",think:"${uri("cat-think.webp")}",cheer:"${uri("cat-cheer.webp")}",encourage:"${uri("cat-encourage.webp")}"};</script>
 <script nonce="${nonce}" src="${uri("panel.js")}"></script>
 </body></html>`;
   }
@@ -692,7 +692,7 @@ class Arcade {
   <div class="qwrap"><div class="qcard" id="qcard"></div></div>
 </div>
 <div class="overlay" id="overlay"><div class="endcard">
-  <img src="${uri("pica.png")}" width="56" height="56"/>
+  <img id="endcat" src="${uri("cat-cheer.webp")}" width="88" height="88" style="image-rendering:pixelated"/>
   <div class="endcard__title">GREAT JOB!</div>
   <div class="endcard__score">0</div>
   <div class="endcard__hi"></div>
@@ -702,7 +702,7 @@ class Arcade {
     <button class="btn" id="back" style="background:var(--paper)">Back to Pica 🐾</button>
   </div>
 </div></div>
-<script nonce="${nonce}">window.PICA_ROUND=${data};</script>
+<script nonce="${nonce}">window.PICA_ROUND=${data};window.PICA_CATS={idle:"${uri("cat-idle.webp")}",cheer:"${uri("cat-cheer.webp")}",encourage:"${uri("cat-encourage.webp")}"};</script>
 <script nonce="${nonce}" src="${uri("arcade.js")}"></script>
 </body></html>`;
   }

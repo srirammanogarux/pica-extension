@@ -16,6 +16,7 @@ img.sprite,#thread img{image-rendering:pixelated}
 
 /* header */
 .head{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--ink);color:#fff;border-bottom:2px solid #000;flex:0 0 auto}
+.headcat{width:34px;height:34px;image-rendering:pixelated;flex:0 0 auto}
 .head__t{display:flex;flex-direction:column;line-height:1.15;min-width:0}
 .head__t strong{font-family:var(--display);font-size:14px;letter-spacing:.4px}
 .head__t span{font-family:var(--mono);font-size:9.5px;color:var(--grass);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
