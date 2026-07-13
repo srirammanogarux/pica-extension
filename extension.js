@@ -50,10 +50,11 @@ function normAnswer(s) {
 // ---------------------------------------------------------------------
 // BYO-key model: every user brings their OWN OpenRouter key. It lives in VS Code
 // SecretStorage on their machine only — it is never bundled, synced, or sent to us.
-async function hermesChat(context, messages, kind) {
+async function hermesChat(context, messages, kind, opts) {
+  opts = opts || {};
   const key = await context.secrets.get("pica.nousKey");
   if (!key) throw new Error("NO_KEY");
-  const model = vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
+  const model = opts.model || vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
   const res = await fetch(CONFIG.API_BASE + "/chat/completions", {
     method: "POST",
     headers: {
@@ -185,7 +186,7 @@ class PicaPanel {
     const uri = (f) => wv.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
     const nonce = Math.random().toString(36).slice(2);
     return `<!doctype html><html><head><meta charset="utf-8"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${wv.cspSource}; style-src ${wv.cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${wv.cspSource} data:; style-src ${wv.cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';"/>
 <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <link href="${uri("panel.css")}" rel="stylesheet"/>
 </head><body>
@@ -204,8 +205,10 @@ class PicaPanel {
   <button class="tool" id="t-fpcheck" title="Check my filled blanks">✓ Check</button>
 </nav>
 <main id="thread"></main>
+<div class="attachbar" id="attachbar"></div>
 <footer class="composer">
-  <input id="ask" type="text" placeholder="Ask Pica anything…" autocomplete="off"/>
+  <button id="attach" title="Attach a screenshot (or just paste one)">🖼</button>
+  <input id="ask" type="text" placeholder="Ask Pica, or paste a screenshot…" autocomplete="off"/>
   <button id="send">➤</button>
 </footer>
 <script nonce="${nonce}">window.PICA_SPRITE="${uri("pica.png")}";window.PICA_CATS={idle:"${uri("cat-idle.webp")}",think:"${uri("cat-think.webp")}",cheer:"${uri("cat-cheer.webp")}",encourage:"${uri("cat-encourage.webp")}"};</script>
@@ -306,7 +309,8 @@ class Engine {
         case "allow":     this.allowed = true; this.startWatching(); return this.sendInit();
         case "explain":   return this.panel.post({ type: "lesson", data: this.lesson || null });
         case "practiceSubmit": return this.checkPractice(m.answer);
-        case "ask":       return this.answer(String(m.text || ""));
+        case "ask":       return this.answer(String(m.text || ""), m.image || null);
+        case "pickImage": return this.pickImage();
         case "recap":     return this.recap();
         case "quiz":      return this.startQuiz();
         case "quizPick":  return this.quizPick(Number(m.pick));
@@ -339,7 +343,7 @@ class Engine {
     const msg = String((e && e.message) || e);
     if (msg === "NO_KEY")     return this.panel.post({ type: "needKey" });
     if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work (401) — grab a fresh one at openrouter.ai/keys and re-paste it via “Pica: Set API Key”." });
-    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Your OpenRouter account is out of credits (402) — top up at openrouter.ai and I'll purr right back to life 🐾" });
+    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of OpenRouter credits (402) — no worries, I run on free models too! Run “Pica: Choose Model” and pick a free one 🐾" });
     this.panel.post({ type: "error", text: "Hermes hiccupped: " + msg.slice(0, 140) });
   }
 
@@ -560,18 +564,50 @@ class Engine {
     if (score === items.length) this.fp = null;   // all done — clean slate
   }
 
-  // ---------- free chat ----------
-  async answer(text) {
-    if (!text.trim()) return;
+  // ---------- image picker (file dialog → data URL to the panel) ----------
+  async pickImage() {
+    const picks = await vscode.window.showOpenDialog({
+      canSelectMany: false, openLabel: "Attach to Pica",
+      filters: { Images: ["png", "jpg", "jpeg", "gif", "webp"] },
+    });
+    if (!picks || !picks.length) return;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(picks[0]);
+      const ext = extOf(picks[0].fsPath);
+      const mime = ext === "jpg" ? "jpeg" : ext;
+      const b64 = Buffer.from(bytes).toString("base64");
+      this.panel.post({ type: "pickedImage", data: "data:image/" + mime + ";base64," + b64 });
+    } catch (e) { this.panel.post({ type: "error", text: "Couldn't read that image." }); }
+  }
+
+  // ---------- free chat (with optional attached image) ----------
+  async answer(text, image) {
+    if (!text.trim() && !image) return;
     this.panel.post({ type: "busy", on: true });
     try {
-      this.chatHistory.push({ role: "user", content: text });
-      this.chatHistory = this.chatHistory.slice(-8);
-      const reply = await hermesChat(this.context, [
-        { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
-        ...this.chatHistory,
-      ], "chat");
+      let reply;
+      if (image) {
+        // Hermes is text-only → route screenshots to a vision model (free by default)
+        const visionModel = vscode.workspace.getConfiguration("pica").get("visionModel") || "google/gemma-4-31b-it:free";
+        const q = text.trim() || "What's happening in this screenshot? Explain it to me like a designer — in plain words, no jargon. If it's an error or some code, tell me what it means and the one idea to fix it.";
+        reply = await hermesChat(this.context, [
+          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
+          { role: "user", content: [
+            { type: "text", text: q },
+            { type: "image_url", image_url: { url: image } },
+          ] },
+        ], "vision", { model: visionModel });
+        this.chatHistory.push({ role: "user", content: "[shared a screenshot] " + text });
+      } else {
+        this.chatHistory.push({ role: "user", content: text });
+        this.chatHistory = this.chatHistory.slice(-8);
+        reply = await hermesChat(this.context, [
+          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
+          ...this.chatHistory,
+        ], "chat");
+      }
       this.chatHistory.push({ role: "assistant", content: reply });
+      this.chatHistory = this.chatHistory.slice(-8);
       this.panel.post({ type: "chat", text: reply });
     } catch (e) { this.fail(e); }
     finally { this.panel.post({ type: "busy", on: false }); }
@@ -599,13 +635,20 @@ class Arcade {
     eng.panel.post({ type: "busy", on: false });
     if (questions.length < 3) { eng.panel.post({ type: "chat", text: "My question machine jammed — try again in a sec 🐾" }); return; }
 
-    // random game, but never the same one twice in a row
-    const last = this.context.globalState.get("pica.lastGame", "");
-    const pool = BUILT_GAMES.length > 1 ? BUILT_GAMES.filter((g) => g !== last) : BUILT_GAMES;
-    const gameId = pool[Math.floor(Math.random() * pool.length)];
+    // demo opener: first 2 rounds are always Byte Snake, then shuffle (no-repeat).
+    const played = this.context.globalState.get("pica.gamesPlayed", 0);
+    let gameId;
+    if (played < 2 && BUILT_GAMES.includes("snake")) {
+      gameId = "snake";
+    } else {
+      const last = this.context.globalState.get("pica.lastGame", "");
+      const pool = BUILT_GAMES.length > 1 ? BUILT_GAMES.filter((g) => g !== last) : BUILT_GAMES;
+      gameId = pool[Math.floor(Math.random() * pool.length)];
+    }
     this.context.globalState.update("pica.lastGame", gameId);
+    this.context.globalState.update("pica.gamesPlayed", played + 1);
     this.lastMode = mode;
-    eng.panel.post({ type: "chat", text: "🎲 Rolled: **" + (GAME_NAMES[gameId] || gameId) + "**! Good luck 🐾" });
+    eng.panel.post({ type: "chat", text: "🎲 " + (played < 2 ? "Starting with" : "Rolled") + ": **" + (GAME_NAMES[gameId] || gameId) + "**! Good luck 🐾" });
     const hiscores = this.context.globalState.get("pica.hiscores", {});
     const payload = {
       game: gameId, mode,
@@ -672,7 +715,7 @@ class Arcade {
     const nonce = Math.random().toString(36).slice(2);
     const data = JSON.stringify(payload).replace(/</g, "\\u003c");
     return `<!doctype html><html><head><meta charset="utf-8"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${wv.cspSource}; style-src ${wv.cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${wv.cspSource} data:; style-src ${wv.cspSource} 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';"/>
 <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <link href="${uri("arcade.css")}" rel="stylesheet"/>
 </head><body>
@@ -767,6 +810,29 @@ function activate(context) {
     vscode.commands.registerCommand("pica.open", () => vscode.commands.executeCommand("workbench.view.extension.pica")),
     vscode.commands.registerCommand("pica.simulateHermes", simulateHermes),
     vscode.commands.registerCommand("pica.practiceFile", () => engine.startFilePractice()),
+    vscode.commands.registerCommand("pica.resetArcade", () => {
+      context.globalState.update("pica.gamesPlayed", 0);
+      context.globalState.update("pica.lastGame", "");
+      vscode.window.showInformationMessage("Pica: arcade reset — next round starts with Byte Snake 🐍");
+    }),
+    vscode.commands.registerCommand("pica.chooseModel", async () => {
+      const items = [
+        { label: "Hermes 4 70B", description: "nousresearch/hermes-4-70b · best, pay-per-use", model: "nousresearch/hermes-4-70b" },
+        { label: "Hermes 3 405B (free)", description: "nousresearch/hermes-3-llama-3.1-405b:free · no credits needed", model: "nousresearch/hermes-3-llama-3.1-405b:free" },
+        { label: "Qwen3 Coder (free)", description: "qwen/qwen3-coder:free · great for code", model: "qwen/qwen3-coder:free" },
+        { label: "Llama 3.3 70B (free)", description: "meta-llama/llama-3.3-70b-instruct:free", model: "meta-llama/llama-3.3-70b-instruct:free" },
+        { label: "$(edit) Custom…", description: "type any OpenRouter model id", model: "__custom__" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pick the model that powers Pica (‘free’ = no OpenRouter credits needed)" });
+      if (!pick) return;
+      let model = pick.model;
+      if (model === "__custom__") {
+        model = await vscode.window.showInputBox({ prompt: "OpenRouter model id (e.g. author/model:free)", ignoreFocusOut: true });
+        if (!model) return;
+      }
+      await vscode.workspace.getConfiguration("pica").update("model", model.trim(), vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage("Pica now runs on " + model.trim() + " 🐾");
+    }),
     vscode.commands.registerCommand("pica.setEmail", async () => {
       const email = await vscode.window.showInputBox({ prompt: "The email you signed up with at pica-landing.vercel.app", ignoreFocusOut: true });
       if (email && email.trim()) {

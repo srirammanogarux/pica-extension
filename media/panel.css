@@ -69,7 +69,17 @@ img.sprite,#thread img{image-rendering:pixelated}
 
 /* composer */
 .composer{display:flex;gap:6px;padding:8px;background:var(--sky);border-top:2px solid var(--dark);flex:0 0 auto}
-#ask{flex:1;font-size:12px;padding:7px 9px;border:2px solid var(--dark);background:#fff;color:var(--ink)}
+#attach{font-size:15px;background:var(--paper);border:2px solid var(--dark);box-shadow:2px 2px 0 var(--dark);padding:0 8px;cursor:pointer;line-height:1}
+#attach:active{transform:translate(2px,2px);box-shadow:0 0 0 var(--dark)}
+#ask{flex:1;font-size:12px;padding:7px 9px;border:2px solid var(--dark);background:#fff;color:var(--ink);min-width:0}
 #ask:focus{outline:none;box-shadow:2px 2px 0 var(--dark)}
 #send{font-size:13px;background:var(--orange);border:2px solid var(--dark);box-shadow:2px 2px 0 var(--dark);padding:0 12px;cursor:pointer;color:var(--ink)}
 #send:active{transform:translate(2px,2px);box-shadow:0 0 0 var(--dark)}
+/* image attach chip + message thumbnail */
+.attachbar:empty{display:none}
+.attachbar{padding:6px 8px 0;background:var(--sky)}
+.imgchip{display:flex;align-items:center;gap:7px;background:var(--paper);border:2px solid var(--dark);box-shadow:2px 2px 0 var(--dark);padding:4px 6px}
+.imgchip img{width:34px;height:34px;object-fit:cover;border:1px solid var(--dark);image-rendering:auto}
+.imgchip span{flex:1;font-family:var(--mono);font-size:10px;color:var(--brown)}
+.imgchip button{background:none;border:none;cursor:pointer;font-size:12px;color:var(--dark)}
+.thumb{max-width:180px;border:2px solid var(--dark);image-rendering:auto}

@@ -2,7 +2,7 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your Hermes agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "stimuler",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
@@ -24,8 +24,10 @@
       { "command": "pica.open", "title": "Pica: Open Panel" },
       { "command": "pica.setEmail", "title": "Pica: Set Signup Email" },
       { "command": "pica.setApiKey", "title": "Pica: Set My OpenRouter Key" },
+      { "command": "pica.chooseModel", "title": "Pica: Choose Model (free options)" },
       { "command": "pica.simulateHermes", "title": "Pica: Simulate a Hermes Edit (demo)" },
-      { "command": "pica.practiceFile", "title": "Pica: Blank This File for Practice" }
+      { "command": "pica.practiceFile", "title": "Pica: Blank This File for Practice" },
+      { "command": "pica.resetArcade", "title": "Pica: Reset Arcade (demo)" }
     ],
     "configuration": {
       "title": "Pica",
@@ -33,7 +35,12 @@
         "pica.model": {
           "type": "string",
           "default": "nousresearch/hermes-4-70b",
-          "description": "Model id on the Nous inference API used for Pica's explanations."
+          "description": "OpenRouter model for Pica's text (teaching, chat, games). Use a ':free' model to run without credits — e.g. nousresearch/hermes-3-llama-3.1-405b:free, qwen/qwen3-coder:free, meta-llama/llama-3.3-70b-instruct:free."
+        },
+        "pica.visionModel": {
+          "type": "string",
+          "default": "google/gemma-4-31b-it:free",
+          "description": "OpenRouter vision model for analysing attached screenshots/images (Hermes is text-only). Default is free."
         }
       }
     }

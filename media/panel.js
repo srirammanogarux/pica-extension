@@ -46,7 +46,7 @@
   function showNeedKey() {
     setStatus("step 2 of 2 — your key");
     pica("Almost in 🐾 Last step: paste <strong>your own OpenRouter key</strong>. It powers my brain, gets stored <strong>only on this machine</strong>, and your usage bills to you — never to anyone else.");
-    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="sk-or-…"/><div style="height:6px"></div><a class="k-link" href="https://openrouter.ai/keys">get a key → openrouter.ai/keys (free credits to start)</a></div>');
+    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="sk-or-…"/><div style="height:6px"></div><a class="k-link" href="https://openrouter.ai/keys">get a key → openrouter.ai/keys</a><div class="k-link" style="margin-top:5px">No credits? No problem — I run on <strong>free models</strong> too. After you\'re in, run “Pica: Choose Model” and pick a free one 🐾</div></div>');
     thread.appendChild(wrap);
     const saveB = action("Save my key");
     const inp = wrap.querySelector("#keyin");
@@ -102,6 +102,7 @@
       }
       case "needEmail": thread.innerHTML = ""; return showNeedEmail();
       case "needKey": thread.innerHTML = ""; return showNeedKey();
+      case "pickedImage": if (m.data) setImage(m.data); return;
       case "status": setStatus(m.text); return;
       case "busy": typing(!!m.on); if (headcat && !cheerTimer) setCat(m.on ? "think" : "idle"); return;
       case "error": typing(false); err(m.text); return;
@@ -186,16 +187,56 @@
     }
   });
 
+  // ---------- image attach (paste a screenshot or pick a file) ----------
+  const attachbar = document.getElementById("attachbar");
+  const attachBtn = document.getElementById("attach");
+  let pendingImage = null;   // resized data URL, sent with the next message
+
+  function shrink(dataUrl, cb) {          // downscale big screenshots before sending
+    const img = new Image();
+    img.onload = function () {
+      const max = 1200, s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      cb(c.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = function () { cb(dataUrl); };
+    img.src = dataUrl;
+  }
+  function setImage(dataUrl) {
+    shrink(dataUrl, function (small) {
+      pendingImage = small;
+      attachbar.innerHTML = "";
+      const chip = el('<div class="imgchip"><img src="' + small + '"/><span>screenshot ready — ask about it</span><button title="remove">✕</button></div>');
+      chip.querySelector("button").addEventListener("click", clearImage);
+      attachbar.appendChild(chip); scroll();
+    });
+  }
+  function clearImage() { pendingImage = null; attachbar.innerHTML = ""; }
+
+  attachBtn.addEventListener("click", function () { vscode.postMessage({ type: "pickImage" }); });
+  document.addEventListener("paste", function (e) {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image") === 0) {
+        const f = items[i].getAsFile();
+        if (f) { const r = new FileReader(); r.onload = function () { setImage(r.result); }; r.readAsDataURL(f); e.preventDefault(); return; }
+      }
+    }
+  });
+
   // ---------- composer + tone ----------
   function ask() {
     const t = askInp.value.trim();
-    if (!t) return;
-    const me = el('<div class="msg" style="align-self:flex-end;background:var(--orange-lt)"><div class="tx"></div></div>');
-    me.querySelector(".tx").textContent = t;
+    if (!t && !pendingImage) return;
+    const me = el('<div class="msg" style="align-self:flex-end;background:var(--orange-lt);flex-direction:column;gap:5px"></div>');
+    if (pendingImage) { const im = el('<img class="thumb" src="' + pendingImage + '"/>'); me.appendChild(im); }
+    if (t) { const tx = el('<div class="tx"></div>'); tx.textContent = t; me.appendChild(tx); }
     thread.appendChild(me); scroll();
-    askInp.value = "";
     typing(true);
-    vscode.postMessage({ type: "ask", text: t });
+    vscode.postMessage({ type: "ask", text: t, image: pendingImage });
+    askInp.value = ""; clearImage();
   }
   sendBt.addEventListener("click", ask);
   askInp.addEventListener("keydown", function (e) { if (e.key === "Enter") ask(); });
