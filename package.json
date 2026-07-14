@@ -2,7 +2,7 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your AI coding agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "stimuler",
   "license": "MIT",
   "engines": {
@@ -76,7 +76,7 @@
         "pica.model": {
           "type": "string",
           "default": "",
-          "description": "Optional model override for Pica's text (teaching, chat, games). Leave blank to use a smart default for your key's provider. If set, match it to your key: OpenRouter (author/model, e.g. nousresearch/hermes-4-70b or a ':free' model), Google Gemini (gemini-2.0-flash), or OpenAI (gpt-4o-mini). A model that doesn't fit your key is ignored."
+          "description": "Optional model override for Pica's text (teaching, chat, games). Leave blank to use a smart default for your key's provider. If set, match it to your key: OpenRouter (author/model, e.g. nousresearch/hermes-4-70b or a ':free' model), Google Gemini (gemini-2.0-flash), Anthropic/Claude (claude-haiku-4-5, claude-sonnet-5, claude-opus-4-8), or OpenAI (gpt-4o-mini). A model that doesn't fit your key is ignored."
         },
         "pica.visionModel": {
           "type": "string",

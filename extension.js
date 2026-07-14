@@ -45,13 +45,15 @@ function normAnswer(s) {
 }
 
 // ---------------------------------------------------------------------
-// Provider routing — Pica works with ANY OpenAI-compatible key.
+// Provider routing — Pica works with ANY of these keys.
 // ---------------------------------------------------------------------
-// We detect the provider from the key's prefix and route to the right endpoint.
-// All three speak the same /chat/completions shape, so one code path serves all:
-//   sk-or-… → OpenRouter  (one key, hundreds of models incl. free ones)
-//   AIza…   → Google Gemini (native, via its OpenAI-compatible endpoint)
+// We detect the provider from the key's prefix and route to the right endpoint:
+//   sk-or-… → OpenRouter     (one key, hundreds of models incl. free ones)
+//   AIza…   → Google Gemini  (native, via its OpenAI-compatible endpoint)
+//   sk-ant-…→ Anthropic      (native Claude Messages API — NOT OpenAI-shaped)
 //   sk-…    → OpenAI
+// OpenRouter / Gemini / OpenAI share the /chat/completions shape; Anthropic uses
+// its own Messages API, so hermesChat branches on provider.id === "anthropic".
 function providerFor(key) {
   const k = (key || "").trim();
   if (k.startsWith("sk-or-")) return {
@@ -65,6 +67,13 @@ function providerFor(key) {
     base: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-2.0-flash",
     vision: "gemini-2.0-flash", // Gemini is multimodal — same model reads images
+  };
+  // sk-ant- must be checked BEFORE sk- (Anthropic keys also start with "sk-").
+  if (k.startsWith("sk-ant-")) return {
+    id: "anthropic", label: "Anthropic (Claude)",
+    base: "https://api.anthropic.com/v1", // uses the native Messages API, not /chat/completions
+    model: "claude-haiku-4-5",  // fast + affordable default, matching the other providers' cheap tier
+    vision: "claude-haiku-4-5", // every Claude model is multimodal
   };
   if (k.startsWith("sk-")) return {
     id: "openai", label: "OpenAI",
@@ -87,6 +96,7 @@ function modelMatchesProvider(model, provider) {
   if (!model) return false;
   const m = String(model).toLowerCase();
   if (provider.id === "gemini") return m.startsWith("gemini") || m.startsWith("models/gemini");
+  if (provider.id === "anthropic") return m.startsWith("claude");
   if (provider.id === "openai") return m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") || m.startsWith("chatgpt");
   return m.includes("/"); // OpenRouter model ids are always "author/model"
 }
@@ -111,6 +121,8 @@ async function hermesChat(context, messages, kind, opts) {
     const um = cfg.get("model");
     model = modelMatchesProvider(um, provider) ? um : provider.model;
   }
+  // Anthropic speaks its own Messages API — route it through a dedicated path.
+  if (provider.id === "anthropic") return anthropicChat(context, key, model, messages, kind);
   const res = await fetch(provider.base + "/chat/completions", {
     method: "POST",
     headers: {
@@ -134,6 +146,66 @@ async function hermesChat(context, messages, kind, opts) {
     ? (data.choices[0].message.content || "") : "";
   if (!text) throw new Error("EMPTY_REPLY");
   logEvent(context, kind || "chat", Number(data && data.usage && data.usage.total_tokens) || 0);
+  return text.trim();
+}
+
+// Convert an OpenAI-style message content (string, or [{type:text|image_url}])
+// into Anthropic content blocks. Data-URI images become base64 image blocks.
+function toAnthropicContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return String(content || "");
+  return content.map((part) => {
+    if (!part || typeof part !== "object") return { type: "text", text: String(part || "") };
+    if (part.type === "text") return { type: "text", text: part.text || "" };
+    if (part.type === "image_url") {
+      const url = (part.image_url && part.image_url.url) || "";
+      const m = /^data:(.+?);base64,([\s\S]*)$/.exec(url);
+      if (m) return { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } };
+      return { type: "image", source: { type: "url", url } };
+    }
+    return { type: "text", text: "" };
+  });
+}
+
+// Anthropic (Claude) native Messages API. System goes top-level; images become
+// base64 blocks; no temperature (removed on current Claude models). BYO x-api-key.
+async function anthropicChat(context, key, model, messages, kind) {
+  let system = "";
+  const conv = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      if (typeof m.content === "string") system += (system ? "\n\n" : "") + m.content;
+      continue;
+    }
+    conv.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: toAnthropicContent(m.content),
+    });
+  }
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({ model, max_tokens: 900, system: system || undefined, messages: conv }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
+    if (res.status === 400 && /x-api-key|authentication|invalid.*key|api key/i.test(body)) throw new Error("BAD_KEY");
+    if (res.status === 429) throw new Error(/credit|quota|billing/i.test(body) ? "NO_CREDITS" : "RATE_LIMIT");
+    if (res.status === 529) throw new Error("RATE_LIMIT");
+    throw new Error("API_" + res.status + " " + body.slice(0, 200));
+  }
+  const data = await res.json();
+  const text = Array.isArray(data.content)
+    ? data.content.filter((b) => b && b.type === "text").map((b) => b.text).join("")
+    : "";
+  if (!text) throw new Error("EMPTY_REPLY");
+  const usage = data && data.usage;
+  logEvent(context, kind || "chat", usage ? Number(usage.input_tokens || 0) + Number(usage.output_tokens || 0) : 0);
   return text.trim();
 }
 
@@ -427,7 +499,7 @@ class Engine {
   fail(e) {
     const msg = String((e && e.message) || e);
     if (msg === "NO_KEY")     return this.panel.post({ type: "needKey" });
-    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work — double-check it (OpenRouter, Gemini, or OpenAI) and re-paste via “Pica: Set My API Key”." });
+    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work — double-check it (OpenRouter, Gemini, Anthropic/Claude, or OpenAI) and re-paste via “Pica: Set My API Key”." });
     if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of credits/quota on your provider — top up, or if you're on OpenRouter run “Pica: Choose Model” and pick a free one 🐾" });
     if (msg === "RATE_LIMIT") return this.panel.post({ type: "error", text: "Whoa — your provider says too many requests too fast (429). Give it a few seconds and try again 🐾" });
     this.panel.post({ type: "error", text: "Pica hiccupped: " + msg.slice(0, 140) });
@@ -955,14 +1027,17 @@ function activate(context) {
         { label: "Qwen3 Coder (free)", description: "OpenRouter key · qwen/qwen3-coder:free · great for code", model: "qwen/qwen3-coder:free" },
         { label: "Llama 3.3 70B (free)", description: "OpenRouter key · meta-llama/llama-3.3-70b-instruct:free", model: "meta-llama/llama-3.3-70b-instruct:free" },
         { label: "Gemini 2.0 Flash", description: "Google Gemini key · gemini-2.0-flash · generous free tier", model: "gemini-2.0-flash" },
+        { label: "Claude Haiku 4.5", description: "Anthropic key · claude-haiku-4-5 · fast & affordable", model: "claude-haiku-4-5" },
+        { label: "Claude Sonnet 5", description: "Anthropic key · claude-sonnet-5 · balanced, near-Opus quality", model: "claude-sonnet-5" },
+        { label: "Claude Opus 4.8", description: "Anthropic key · claude-opus-4-8 · most capable", model: "claude-opus-4-8" },
         { label: "GPT-4o mini", description: "OpenAI key · gpt-4o-mini · cheap & fast", model: "gpt-4o-mini" },
         { label: "$(edit) Custom…", description: "type any model id for your provider", model: "__custom__" },
       ];
-      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pick a model (match it to your key: OpenRouter / Gemini / OpenAI)" });
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pick a model (match it to your key: OpenRouter / Gemini / Claude / OpenAI)" });
       if (!pick) return;
       let model = pick.model;
       if (model === "__custom__") {
-        model = await vscode.window.showInputBox({ prompt: "Model id — OpenRouter (author/model), Gemini (gemini-…), or OpenAI (gpt-…)", ignoreFocusOut: true });
+        model = await vscode.window.showInputBox({ prompt: "Model id — OpenRouter (author/model), Gemini (gemini-…), Claude (claude-…), or OpenAI (gpt-…)", ignoreFocusOut: true });
         if (!model) return;
       }
       await vscode.workspace.getConfiguration("pica").update("model", model.trim(), vscode.ConfigurationTarget.Global);
@@ -981,7 +1056,7 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("pica.setApiKey", async () => {
-      const key = await vscode.window.showInputBox({ prompt: "Paste your API key — OpenRouter (sk-or-…), Google Gemini (AIza…), or OpenAI (sk-…)", password: true, ignoreFocusOut: true });
+      const key = await vscode.window.showInputBox({ prompt: "Paste your API key — OpenRouter (sk-or-…), Gemini (AIza…), Anthropic/Claude (sk-ant-…), or OpenAI (sk-…)", password: true, ignoreFocusOut: true });
       if (key && key.trim()) {
         await context.secrets.store("pica.nousKey", key.trim());
         vscode.window.showInformationMessage("Pica: key saved 🐾");
