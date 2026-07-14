@@ -7,8 +7,9 @@
   const sendBt = document.getElementById("send");
   const AV = '<img class="av" src="' + window.PICA_SPRITE + '"/>';
 
-  let state = { hasEmail: false, hasKey: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#" };
+  let state = { hasEmail: false, hasKey: false, email: "", allowed: false, tone: "friend", hasWorkspace: true, landing: "#", agent: "your agent" };
   let typingEl = null;
+  function agentName() { return (state && state.agent) || "your agent"; }
 
   // animated header cat — idle by default, thinks while busy, cheers on a win
   const CATS = window.PICA_CATS || {};
@@ -59,7 +60,7 @@
 
   function showNeedEmail() {
     setStatus("step 1 of 2 — who are you?");
-    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code Hermes writes, in your words. First: what's the <strong>email you signed up with</strong>?");
+    pica("Hey — I'm <strong>Pica</strong> 🐾 I explain the code <strong>" + escapeHtml(agentName()) + "</strong> writes, in your words. First: what's the <strong>email you signed up with</strong>?");
     const wrap = el('<div class="msg" style="display:block"><input class="inp" id="emin" type="email" placeholder="you@studio.com"/><div style="height:6px"></div><a class="k-link" href="' + state.landing + '">not signed up yet? → pica-landing.vercel.app</a></div>');
     thread.appendChild(wrap);
     const saveB = action("That's me");
@@ -73,14 +74,14 @@
 
   function showZero() {
     setStatus("ready");
-    pica("Purrfect. I'll ride along while <strong>Hermes</strong> writes your code — when it does something worth knowing, I'll pipe up and teach it in plain designer. Mind if I watch?");
+    pica("Purrfect. I'll ride along while <strong>" + escapeHtml(agentName()) + "</strong> writes your code — when it does something worth knowing, I'll pipe up and teach it in plain designer. Mind if I watch?");
     if (!state.hasWorkspace) sys("open a folder first so I have something to watch");
     const allow = action("Allow Pica to watch");
     allow.addEventListener("click", function () {
       allow.remove();
       vscode.postMessage({ type: "allow" });
       pica("On it. I'll stay quiet until something's worth your time. Go build 👀");
-      sys("tip: run “Pica: Simulate a Hermes Edit” to see me in action");
+      sys("tip: run “Pica: Simulate an Agent Edit” to see me in action");
       setStatus("watching your code");
     });
   }
@@ -96,8 +97,8 @@
         if (!state.hasKey) return showNeedKey();
         if (!state.allowed) return showZero();
         setStatus("watching your code");
-        pica("Back on duty 🐾 I'm watching what Hermes writes. Ask me anything, anytime.");
-        sys("run “Pica: Simulate a Hermes Edit” to demo the loop");
+        pica("Back on duty 🐾 I'm watching what <strong>" + escapeHtml(agentName()) + "</strong> writes. Ask me anything, anytime.");
+        sys("run “Pica: Simulate an Agent Edit” to demo the loop");
         return;
       }
       case "needEmail": thread.innerHTML = ""; return showNeedEmail();
@@ -107,7 +108,7 @@
       case "busy": typing(!!m.on); if (headcat && !cheerTimer) setCat(m.on ? "think" : "idle"); return;
       case "error": typing(false); err(m.text); return;
       case "spotted": {
-        sys("👀 Hermes touched " + m.file);
+        sys("👀 " + agentName() + " touched " + m.file);
         typing(true);
         return;
       }
@@ -136,7 +137,7 @@
       case "practiceResult": {
         if (m.ok) cheer();
         pica(m.ok
-          ? "✓ <strong>" + escapeHtml(m.answer) + "</strong> — nailed it. You just wrote the line Hermes would've. " + (m.concept ? "<strong>Unlocked:</strong> " + md(m.concept) : "")
+          ? "✓ <strong>" + escapeHtml(m.answer) + "</strong> — nailed it. You just wrote the line " + escapeHtml(agentName()) + " would've. " + (m.concept ? "<strong>Unlocked:</strong> " + md(m.concept) : "")
           : "Close! It's <strong>" + escapeHtml(m.answer) + "</strong>. You'll get the next one 🐾 " + (m.concept ? "<strong>Concept:</strong> " + md(m.concept) : ""));
         // offer a quiz on what was just taught
         const qb = action("Quiz me on this 🧠", true);

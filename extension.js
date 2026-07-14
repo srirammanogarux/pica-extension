@@ -111,15 +111,16 @@ function parseJSONBlock(text, requiredKey) {
 }
 const parseLessonJSON = (text) => parseJSONBlock(text, "explanation");
 
-function teachSystemPrompt(tone) {
+function teachSystemPrompt(tone, agent) {
+  agent = agent || "the agent";
   const voice = tone === "professor"
     ? "TONE: professor — precise, calm, structured. Still zero jargon without an instant plain-words translation. No emoji."
     : "TONE: friend — warm, playful, encouraging. A single 🐾 is welcome when it fits.";
   return [
-    "You are Pica, a pixel-art cat living in a code editor. You teach DESIGNERS the code their AI agent (Hermes) just wrote. The reader is a smart product/UX designer who ships software but cannot read code yet.",
+    "You are Pica, a pixel-art cat living in a code editor. You teach DESIGNERS the code their AI coding agent (called \"" + agent + "\") just wrote. Refer to the agent as \"" + agent + "\" when you mention it. The reader is a smart product/UX designer who ships software but cannot read code yet.",
     voice,
     "You will be given a code change (filename + the lines that were added or changed). Pick the ONE most teachable thing in it and respond with ONLY this JSON (no markdown fences, no prose outside it):",
-    '{"teaser":"one-line hook question, max 90 chars, about the specific thing (e.g. \'Hermes just added a loop that draws your whole list — want the 20-second version?\')",',
+    '{"teaser":"one-line hook question, max 90 chars, about the specific thing (e.g. \'' + agent + ' just added a loop that draws your whole list — want the 20-second version?\')",',
     '"explanation":"2-4 short sentences in designer language. Analogies from design/everyday life. Explain what it DOES for the product, not syntax trivia.",',
     '"concept":"Name the single concept in <=12 words, e.g. \'Mapping a list — one row of data in, one piece of UI out.\'",',
     '"practice":{"prompt":"one-line fill-in-the-blank instruction","display":"1-3 lines of the REAL code from the diff with the key token replaced by ____","answer":"the exact missing token"}}',
@@ -127,13 +128,14 @@ function teachSystemPrompt(tone) {
   ].join("\n");
 }
 
-function chatSystemPrompt(tone, contextBlock) {
+function chatSystemPrompt(tone, contextBlock, agent) {
+  agent = agent || "their coding agent";
   const voice = tone === "professor"
     ? "Tone: professor — precise, calm, jargon-free."
     : "Tone: friend — warm, playful, a 🐾 when it fits.";
   return [
     "You are Pica, a pixel-art cat living inside the user's code editor (VS Code), teaching a designer who cannot read code yet. Answer in designer language: plain words, design-world analogies, 2-5 short sentences max. Never a wall of text. Never condescend.",
-    "IMPORTANT: You are inside their real software project. ALWAYS interpret questions in the context of software development and THIS project. Examples: 'OpenRouter key' means the API key for the OpenRouter LLM service (never a Wi-Fi router); 'terminal' means the editor's terminal; 'agent' means their coding agent (Hermes/Claude). When they ask what something is, relate it to what they're building right now if you can.",
+    "IMPORTANT: You are inside their real software project. ALWAYS interpret questions in the context of software development and THIS project. Examples: 'OpenRouter key' means the API key for the OpenRouter LLM service (never a Wi-Fi router); 'terminal' means the editor's terminal; 'agent' means their coding agent (\"" + agent + "\"). When they ask what something is, relate it to what they're building right now if you can.",
     voice,
     contextBlock ? "=== LIVE PROJECT CONTEXT (use this!) ===\n" + contextBlock : "",
   ].filter(Boolean).join("\n");
@@ -233,6 +235,7 @@ class Engine {
     this.recentDiffs = [];             // rolling [{file, lines, at}] — session context
     this.taughtConcepts = [];          // rolling list of concepts Pica taught
     this.workspaceBrief = "";          // project name + top-level structure
+    this.detectedAgent = "your agent"; // auto-detected coding agent name
     this.quiz = null;                  // {questions, i, score}
     this.fp = null;                    // file practice {doc, file, blanks}
     this.chatHistory = [];
@@ -258,6 +261,22 @@ class Engine {
     }
     if (this.taughtConcepts.length) parts.push("Concepts Pica already taught this session: " + this.taughtConcepts.join(" · "));
     return parts.join("\n\n").slice(0, 6000);
+  }
+
+  // The name Pica calls the coding agent — user setting wins, else auto-detect.
+  get agentName() {
+    const c = vscode.workspace.getConfiguration("pica").get("agentName");
+    return (c && c.trim()) || this.detectedAgent || "your agent";
+  }
+  async detectAgent() {
+    const f = vscode.workspace.workspaceFolders;
+    if (!f || !f.length) return;
+    const root = f[0].uri;
+    const has = async (p) => { try { await vscode.workspace.fs.stat(vscode.Uri.joinPath(root, p)); return true; } catch (e) { return false; } };
+    if (await has(".claude") || await has("CLAUDE.md")) this.detectedAgent = "Claude Code";
+    else if (await has(".cursor")) this.detectedAgent = "Cursor";
+    else if (await has(".aider.conf.yml")) this.detectedAgent = "Aider";
+    else this.detectedAgent = "your agent";
   }
 
   async buildWorkspaceBrief() {
@@ -324,6 +343,7 @@ class Engine {
 
   async sendInit() {
     this.buildWorkspaceBrief();   // project context available even before watching starts
+    await this.detectAgent();     // figure out which coding agent we're riding along with
     this.panel.post({
       type: "init",
       state: {
@@ -332,6 +352,7 @@ class Engine {
         email: this.email,
         allowed: this.allowed,
         tone: this.tone,
+        agent: this.agentName,
         hasWorkspace: !!(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length),
         landing: CONFIG.LANDING,
       },
@@ -344,7 +365,7 @@ class Engine {
     if (msg === "NO_KEY")     return this.panel.post({ type: "needKey" });
     if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work (401) — grab a fresh one at openrouter.ai/keys and re-paste it via “Pica: Set API Key”." });
     if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of OpenRouter credits (402) — no worries, I run on free models too! Run “Pica: Choose Model” and pick a free one 🐾" });
-    this.panel.post({ type: "error", text: "Hermes hiccupped: " + msg.slice(0, 140) });
+    this.panel.post({ type: "error", text: "Pica hiccupped: " + msg.slice(0, 140) });
   }
 
   // ---------- watching ----------
@@ -369,7 +390,7 @@ class Engine {
     this.watcher.onDidChange(onEvt);
     this.watcher.onDidCreate(onEvt);
     this.context.subscriptions.push(this.watcher);
-    this.panel.post({ type: "status", text: "watching your code", agent: "● Hermes · connected" });
+    this.panel.post({ type: "status", text: "watching your code", agent: "● " + this.agentName + " · connected" });
   }
 
   async onFileEvent(uri) {
@@ -412,11 +433,11 @@ class Engine {
     let lesson = null;
     try {
       const raw = await hermesChat(this.context, [
-        { role: "system", content: teachSystemPrompt(this.tone) },
+        { role: "system", content: teachSystemPrompt(this.tone, this.agentName) },
         { role: "user", content: diffText },
       ], "lesson");
       lesson = parseLessonJSON(raw);
-      if (!lesson) lesson = { teaser: "Hermes just wrote something worth knowing — want the short version?", explanation: raw.slice(0, 600), concept: "", practice: null };
+      if (!lesson) lesson = { teaser: this.agentName + " just wrote something worth knowing — want the short version?", explanation: raw.slice(0, 600), concept: "", practice: null };
     } catch (e) { this.panel.post({ type: "spotfail" }); return this.fail(e); }
     lesson.file = rel;
     this.lesson = lesson;
@@ -442,14 +463,14 @@ class Engine {
     this.panel.post({ type: "busy", on: true });
     try {
       if (!vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) {
-        this.panel.post({ type: "chat", text: "I can't see a project yet — **File → Open Folder…** and pick the folder you're building in. Then I can watch what Claude/Hermes writes there 🐾" });
+        this.panel.post({ type: "chat", text: "I can't see a project yet — **File → Open Folder…** and pick the folder you're building in. Then I can watch what " + this.agentName + " writes there 🐾" });
         return;
       }
       if (!this.workspaceBrief) await this.buildWorkspaceBrief();
       const ctx = this.contextBlock();
-      if (!ctx) { this.panel.post({ type: "chat", text: "Nothing to recap yet — build something (or run a simulated Hermes edit) and ask me again 🐾" }); return; }
+      if (!ctx) { this.panel.post({ type: "chat", text: "Nothing to recap yet — build something (or run a simulated agent edit) and ask me again 🐾" }); return; }
       const reply = await hermesChat(this.context, [
-        { role: "system", content: chatSystemPrompt(this.tone, ctx) },
+        { role: "system", content: chatSystemPrompt(this.tone, ctx, this.agentName) },
         { role: "user", content: "Give me a SHORT session recap: in 3-5 tiny bullets (plain designer language, no jargon), what is being built/changed in this project right now and what each recent change does for the product. Keep the whole thing under 90 words." },
       ], "recap");
       this.panel.post({ type: "chat", text: reply });
@@ -591,7 +612,7 @@ class Engine {
         const visionModel = vscode.workspace.getConfiguration("pica").get("visionModel") || "google/gemma-4-31b-it:free";
         const q = text.trim() || "What's happening in this screenshot? Explain it to me like a designer — in plain words, no jargon. If it's an error or some code, tell me what it means and the one idea to fix it.";
         reply = await hermesChat(this.context, [
-          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
+          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock(), this.agentName) },
           { role: "user", content: [
             { type: "text", text: q },
             { type: "image_url", image_url: { url: image } },
@@ -602,7 +623,7 @@ class Engine {
         this.chatHistory.push({ role: "user", content: text });
         this.chatHistory = this.chatHistory.slice(-8);
         reply = await hermesChat(this.context, [
-          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock()) },
+          { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock(), this.agentName) },
           ...this.chatHistory,
         ], "chat");
       }
@@ -626,7 +647,7 @@ class Arcade {
 
   async start(mode) {
     const eng = this.engine;
-    if (!eng.lesson) { eng.panel.post({ type: "chat", text: "Let me teach you something first — then we play 🐾 (build something, or run a simulated Hermes edit)" }); return; }
+    if (!eng.lesson) { eng.panel.post({ type: "chat", text: "Let me teach you something first — then we play 🐾 (build something, or run a simulated agent edit)" }); return; }
     eng.panel.post({ type: "busy", on: true });
     let questions = [];
     try {
@@ -782,7 +803,7 @@ export function Feed() {
 async function simulateHermes() {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || !folders.length) {
-    vscode.window.showWarningMessage("Pica: open a folder first, then simulate a Hermes edit.");
+    vscode.window.showWarningMessage("Pica: open a folder first, then simulate an agent edit.");
     return;
   }
   const target = vscode.Uri.joinPath(folders[0].uri, "Feed.jsx");
@@ -814,6 +835,28 @@ function activate(context) {
       context.globalState.update("pica.gamesPlayed", 0);
       context.globalState.update("pica.lastGame", "");
       vscode.window.showInformationMessage("Pica: arcade reset — next round starts with Byte Snake 🐍");
+    }),
+    vscode.commands.registerCommand("pica.setAgent", async () => {
+      const items = [
+        { label: "$(sparkle) Auto-detect", description: "figure it out from the workspace", agent: "" },
+        { label: "Claude Code", agent: "Claude Code" },
+        { label: "Cursor", agent: "Cursor" },
+        { label: "Hermes", agent: "Hermes" },
+        { label: "Codex CLI", agent: "Codex CLI" },
+        { label: "Aider", agent: "Aider" },
+        { label: "GitHub Copilot", agent: "GitHub Copilot" },
+        { label: "$(edit) Other…", description: "type the agent's name", agent: "__custom__" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Which coding agent should Pica narrate?" });
+      if (!pick) return;
+      let agent = pick.agent;
+      if (agent === "__custom__") {
+        agent = await vscode.window.showInputBox({ prompt: "Your coding agent's name (e.g. Claude Code)", ignoreFocusOut: true });
+        if (agent === undefined) return;
+      }
+      await vscode.workspace.getConfiguration("pica").update("agentName", (agent || "").trim(), vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(agent && agent.trim() ? "Pica now rides along with " + agent.trim() + " 🐾" : "Pica will auto-detect your coding agent 🐾");
+      engine.sendInit();
     }),
     vscode.commands.registerCommand("pica.chooseModel", async () => {
       const items = [
