@@ -2,33 +2,73 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your AI coding agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "publisher": "stimuler",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Education", "Machine Learning"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Education",
+    "Machine Learning"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "pica", "title": "Pica", "icon": "media/icon.svg" }
+        {
+          "id": "pica",
+          "title": "Pica",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "views": {
       "pica": [
-        { "type": "webview", "id": "pica.panel", "name": "Pica", "icon": "media/icon.svg" }
+        {
+          "type": "webview",
+          "id": "pica.panel",
+          "name": "Pica",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "commands": [
-      { "command": "pica.open", "title": "Pica: Open Panel" },
-      { "command": "pica.setEmail", "title": "Pica: Set Signup Email" },
-      { "command": "pica.setApiKey", "title": "Pica: Set My OpenRouter Key" },
-      { "command": "pica.chooseModel", "title": "Pica: Choose Model (free options)" },
-      { "command": "pica.setAgent", "title": "Pica: Set Coding Agent Name" },
-      { "command": "pica.simulateHermes", "title": "Pica: Simulate an Agent Edit (demo)" },
-      { "command": "pica.practiceFile", "title": "Pica: Blank This File for Practice" },
-      { "command": "pica.resetArcade", "title": "Pica: Reset Arcade (demo)" }
+      {
+        "command": "pica.open",
+        "title": "Pica: Open Panel"
+      },
+      {
+        "command": "pica.setEmail",
+        "title": "Pica: Set Signup Email"
+      },
+      {
+        "command": "pica.setApiKey",
+        "title": "Pica: Set My OpenRouter Key"
+      },
+      {
+        "command": "pica.chooseModel",
+        "title": "Pica: Choose Model (free options)"
+      },
+      {
+        "command": "pica.setAgent",
+        "title": "Pica: Set Coding Agent Name"
+      },
+      {
+        "command": "pica.simulateHermes",
+        "title": "Pica: Simulate an Agent Edit (demo)"
+      },
+      {
+        "command": "pica.practiceFile",
+        "title": "Pica: Blank This File for Practice"
+      },
+      {
+        "command": "pica.resetArcade",
+        "title": "Pica: Reset Arcade (demo)"
+      }
     ],
     "configuration": {
       "title": "Pica",

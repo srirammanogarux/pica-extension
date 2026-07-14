@@ -144,6 +144,28 @@
         qb.addEventListener("click", function () { qb.remove(); vscode.postMessage({ type: "quiz" }); });
         return;
       }
+      case "feedbackPrompt": {
+        pica("Quick one 🐾 — is Pica actually helping you understand the code?");
+        const wrap = el('<div class="msg" style="display:block"></div>');
+        const inp = el('<input class="inp" id="fbnote" type="text" placeholder="anything you\'d change? (optional)"/>');
+        const spacer = el('<div style="height:8px"></div>');
+        const row = el('<div class="row"></div>');
+        const up = el('<button class="act">👍 Yep</button>');
+        const down = el('<button class="act act--ghost">👎 Not yet</button>');
+        function send(rating) {
+          const note = (inp.value || "").trim();
+          up.disabled = down.disabled = true;
+          vscode.postMessage({ type: "feedback", rating: rating, note: note });
+        }
+        up.addEventListener("click", function () { send("up"); });
+        down.addEventListener("click", function () { send("down"); });
+        row.appendChild(up); row.appendChild(down);
+        wrap.appendChild(inp); wrap.appendChild(spacer); wrap.appendChild(row);
+        thread.appendChild(wrap); scroll();
+        inp.addEventListener("keydown", function (e) { if (e.key === "Enter") send("up"); });
+        return;
+      }
+      case "feedbackThanks": { sys("thanks — that shapes what Pica learns next 🐾"); return; }
       case "quizQ": {
         typing(false);
         pica("<strong>Q" + (m.i + 1) + "/" + m.total + ":</strong> " + md(m.q));

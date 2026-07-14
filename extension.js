@@ -301,6 +301,7 @@ class Engine {
     this.fp = null;                    // file practice {doc, file, blanks}
     this.chatHistory = [];
     this.watcher = null;
+    this.feedbackAsked = false;        // ask for feedback at most once per session
   }
 
   // What Pica knows about the session right now — fed to every chat/recap/quiz.
@@ -389,6 +390,8 @@ class Engine {
         case "allow":     this.allowed = true; this.startWatching(); return this.sendInit();
         case "explain":   return this.panel.post({ type: "lesson", data: this.lesson || null });
         case "practiceSubmit": return this.checkPractice(m.answer);
+        case "feedback":  return this.saveFeedback(m.rating, m.note);
+        case "feedbackDismiss": this.context.globalState.update("pica.feedbackGiven", true); return;
         case "ask":       return this.answer(String(m.text || ""), m.image || null);
         case "pickImage": return this.pickImage();
         case "recap":     return this.recap();
@@ -518,6 +521,31 @@ class Engine {
                (normAnswer(answer).length >= 3 && normAnswer(p.answer).includes(normAnswer(answer))) ||
                (normAnswer(answer).length >= 3 && normAnswer(answer).includes(normAnswer(p.answer)));
     this.panel.post({ type: "practiceResult", ok, answer: p.answer, concept: this.lesson.concept || "" });
+    this.maybeAskFeedback();
+  }
+
+  // ---------- feedback: after the first full teach→practice loop, ask once ----------
+  maybeAskFeedback() {
+    if (this.feedbackAsked) return;                                  // once per session
+    if (this.context.globalState.get("pica.feedbackGiven")) return;  // and never again once answered
+    this.feedbackAsked = true;
+    // let the practice result land first, then ask
+    setTimeout(() => this.panel.post({ type: "feedbackPrompt" }), 1400);
+  }
+
+  saveFeedback(rating, note) {
+    this.context.globalState.update("pica.feedbackGiven", true);
+    const email = this.context.globalState.get("pica.email") || "";
+    fetch(CONFIG.CONVEX_URL + "/api/mutation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: "mutations:addFeedback",
+        args: { email, rating: rating === "down" ? "down" : "up", note: String(note || "").slice(0, 500) },
+        format: "json",
+      }),
+    }).catch(() => { /* fire-and-forget — never block the user */ });
+    this.panel.post({ type: "feedbackThanks" });
   }
 
   // ---------- recap: short "what's happening" for the panel ----------
