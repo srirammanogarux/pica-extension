@@ -13,8 +13,7 @@ const CONFIG = {
   PROXY_BASE: "https://doting-cuttlefish-341.convex.site", // Pica backend: verifies signup email
   CONVEX_URL: "https://doting-cuttlefish-341.convex.cloud", // usage pings (email+counts only)
   LANDING: "https://coachme-pica.vercel.app",
-  API_BASE: "https://openrouter.ai/api/v1",   // inference — always the USER'S own key
-  DEFAULT_MODEL: "nousresearch/hermes-4-70b",
+  // inference endpoint + model are chosen per-provider from the user's key — see providerFor()
   DEBOUNCE_MS: 1400,     // let an agent write-burst settle before teaching
   COOLDOWN_MS: 15000,    // min gap between proactive teach moments
   MAX_FILE_BYTES: 200 * 1024,
@@ -46,16 +45,73 @@ function normAnswer(s) {
 }
 
 // ---------------------------------------------------------------------
-// Hermes (Nous) API
+// Provider routing — Pica works with ANY OpenAI-compatible key.
 // ---------------------------------------------------------------------
-// BYO-key model: every user brings their OWN OpenRouter key. It lives in VS Code
-// SecretStorage on their machine only — it is never bundled, synced, or sent to us.
+// We detect the provider from the key's prefix and route to the right endpoint.
+// All three speak the same /chat/completions shape, so one code path serves all:
+//   sk-or-… → OpenRouter  (one key, hundreds of models incl. free ones)
+//   AIza…   → Google Gemini (native, via its OpenAI-compatible endpoint)
+//   sk-…    → OpenAI
+function providerFor(key) {
+  const k = (key || "").trim();
+  if (k.startsWith("sk-or-")) return {
+    id: "openrouter", label: "OpenRouter",
+    base: "https://openrouter.ai/api/v1",
+    model: "nousresearch/hermes-4-70b",
+    vision: "google/gemma-4-31b-it:free", // OpenRouter default text model can't see images
+  };
+  if (k.startsWith("AIza")) return {
+    id: "gemini", label: "Google Gemini",
+    base: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.0-flash",
+    vision: "gemini-2.0-flash", // Gemini is multimodal — same model reads images
+  };
+  if (k.startsWith("sk-")) return {
+    id: "openai", label: "OpenAI",
+    base: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    vision: "gpt-4o-mini", // GPT-4o-mini is multimodal
+  };
+  // Unknown prefix → assume OpenRouter (most permissive; most likely).
+  return {
+    id: "openrouter", label: "OpenRouter",
+    base: "https://openrouter.ai/api/v1",
+    model: "nousresearch/hermes-4-70b",
+    vision: "google/gemma-4-31b-it:free",
+  };
+}
+
+// Does a user-set model id look like it belongs to this provider? If so, honor it;
+// otherwise we fall back to the provider's default so a stale setting can't break a key.
+function modelMatchesProvider(model, provider) {
+  if (!model) return false;
+  const m = String(model).toLowerCase();
+  if (provider.id === "gemini") return m.startsWith("gemini") || m.startsWith("models/gemini");
+  if (provider.id === "openai") return m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") || m.startsWith("chatgpt");
+  return m.includes("/"); // OpenRouter model ids are always "author/model"
+}
+
+// BYO-key model: every user brings their OWN key (OpenRouter, Gemini, or OpenAI).
+// It lives in VS Code SecretStorage on their machine only — never bundled, synced, or sent to us.
 async function hermesChat(context, messages, kind, opts) {
   opts = opts || {};
   const key = await context.secrets.get("pica.nousKey");
   if (!key) throw new Error("NO_KEY");
-  const model = opts.model || vscode.workspace.getConfiguration("pica").get("model") || CONFIG.DEFAULT_MODEL;
-  const res = await fetch(CONFIG.API_BASE + "/chat/completions", {
+  const provider = providerFor(key);
+  const cfg = vscode.workspace.getConfiguration("pica");
+  // Model precedence: explicit per-call override → user setting (only if it fits
+  // this provider) → the provider's sensible default. Vision calls prefer a model
+  // that can actually see images.
+  let model = opts.model;
+  if (!model && opts.vision) {
+    const uv = cfg.get("visionModel");
+    model = modelMatchesProvider(uv, provider) ? uv : provider.vision;
+  }
+  if (!model) {
+    const um = cfg.get("model");
+    model = modelMatchesProvider(um, provider) ? um : provider.model;
+  }
+  const res = await fetch(provider.base + "/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -65,9 +121,14 @@ async function hermesChat(context, messages, kind, opts) {
     },
     body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 900 }),
   });
-  if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
-  if (res.status === 402) throw new Error("NO_CREDITS");
-  if (!res.ok) throw new Error("API_" + res.status + " " + (await res.text()).slice(0, 200));
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 403) throw new Error("BAD_KEY");
+    if (res.status === 400 && /api[_ ]?key|invalid.*key|API_KEY_INVALID/i.test(body)) throw new Error("BAD_KEY");
+    if (res.status === 402) throw new Error("NO_CREDITS");
+    if (res.status === 429) throw new Error(/quota|insufficient|billing/i.test(body) ? "NO_CREDITS" : "RATE_LIMIT");
+    throw new Error("API_" + res.status + " " + body.slice(0, 200));
+  }
   const data = await res.json();
   const text = data && data.choices && data.choices[0] && data.choices[0].message
     ? (data.choices[0].message.content || "") : "";
@@ -363,8 +424,9 @@ class Engine {
   fail(e) {
     const msg = String((e && e.message) || e);
     if (msg === "NO_KEY")     return this.panel.post({ type: "needKey" });
-    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work (401) — grab a fresh one at openrouter.ai/keys and re-paste it via “Pica: Set API Key”." });
-    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of OpenRouter credits (402) — no worries, I run on free models too! Run “Pica: Choose Model” and pick a free one 🐾" });
+    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work — double-check it (OpenRouter, Gemini, or OpenAI) and re-paste via “Pica: Set My API Key”." });
+    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of credits/quota on your provider — top up, or if you're on OpenRouter run “Pica: Choose Model” and pick a free one 🐾" });
+    if (msg === "RATE_LIMIT") return this.panel.post({ type: "error", text: "Whoa — your provider says too many requests too fast (429). Give it a few seconds and try again 🐾" });
     this.panel.post({ type: "error", text: "Pica hiccupped: " + msg.slice(0, 140) });
   }
 
@@ -608,8 +670,8 @@ class Engine {
     try {
       let reply;
       if (image) {
-        // Hermes is text-only → route screenshots to a vision model (free by default)
-        const visionModel = vscode.workspace.getConfiguration("pica").get("visionModel") || "google/gemma-4-31b-it:free";
+        // Route screenshots to a vision-capable model — chosen per provider (OpenRouter's
+        // default text model can't see, so hermesChat swaps in a vision model automatically).
         const q = text.trim() || "What's happening in this screenshot? Explain it to me like a designer — in plain words, no jargon. If it's an error or some code, tell me what it means and the one idea to fix it.";
         reply = await hermesChat(this.context, [
           { role: "system", content: chatSystemPrompt(this.tone, this.contextBlock(), this.agentName) },
@@ -617,7 +679,7 @@ class Engine {
             { type: "text", text: q },
             { type: "image_url", image_url: { url: image } },
           ] },
-        ], "vision", { model: visionModel });
+        ], "vision", { vision: true });
         this.chatHistory.push({ role: "user", content: "[shared a screenshot] " + text });
       } else {
         this.chatHistory.push({ role: "user", content: text });
@@ -860,17 +922,19 @@ function activate(context) {
     }),
     vscode.commands.registerCommand("pica.chooseModel", async () => {
       const items = [
-        { label: "Hermes 4 70B", description: "nousresearch/hermes-4-70b · best, pay-per-use", model: "nousresearch/hermes-4-70b" },
-        { label: "Hermes 3 405B (free)", description: "nousresearch/hermes-3-llama-3.1-405b:free · no credits needed", model: "nousresearch/hermes-3-llama-3.1-405b:free" },
-        { label: "Qwen3 Coder (free)", description: "qwen/qwen3-coder:free · great for code", model: "qwen/qwen3-coder:free" },
-        { label: "Llama 3.3 70B (free)", description: "meta-llama/llama-3.3-70b-instruct:free", model: "meta-llama/llama-3.3-70b-instruct:free" },
-        { label: "$(edit) Custom…", description: "type any OpenRouter model id", model: "__custom__" },
+        { label: "Hermes 4 70B", description: "OpenRouter key · nousresearch/hermes-4-70b · pay-per-use", model: "nousresearch/hermes-4-70b" },
+        { label: "Hermes 3 405B (free)", description: "OpenRouter key · nousresearch/hermes-3-llama-3.1-405b:free", model: "nousresearch/hermes-3-llama-3.1-405b:free" },
+        { label: "Qwen3 Coder (free)", description: "OpenRouter key · qwen/qwen3-coder:free · great for code", model: "qwen/qwen3-coder:free" },
+        { label: "Llama 3.3 70B (free)", description: "OpenRouter key · meta-llama/llama-3.3-70b-instruct:free", model: "meta-llama/llama-3.3-70b-instruct:free" },
+        { label: "Gemini 2.0 Flash", description: "Google Gemini key · gemini-2.0-flash · generous free tier", model: "gemini-2.0-flash" },
+        { label: "GPT-4o mini", description: "OpenAI key · gpt-4o-mini · cheap & fast", model: "gpt-4o-mini" },
+        { label: "$(edit) Custom…", description: "type any model id for your provider", model: "__custom__" },
       ];
-      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pick the model that powers Pica (‘free’ = no OpenRouter credits needed)" });
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pick a model (match it to your key: OpenRouter / Gemini / OpenAI)" });
       if (!pick) return;
       let model = pick.model;
       if (model === "__custom__") {
-        model = await vscode.window.showInputBox({ prompt: "OpenRouter model id (e.g. author/model:free)", ignoreFocusOut: true });
+        model = await vscode.window.showInputBox({ prompt: "Model id — OpenRouter (author/model), Gemini (gemini-…), or OpenAI (gpt-…)", ignoreFocusOut: true });
         if (!model) return;
       }
       await vscode.workspace.getConfiguration("pica").update("model", model.trim(), vscode.ConfigurationTarget.Global);
@@ -889,7 +953,7 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("pica.setApiKey", async () => {
-      const key = await vscode.window.showInputBox({ prompt: "Paste your OpenRouter API key (openrouter.ai/keys)", password: true, ignoreFocusOut: true });
+      const key = await vscode.window.showInputBox({ prompt: "Paste your API key — OpenRouter (sk-or-…), Google Gemini (AIza…), or OpenAI (sk-…)", password: true, ignoreFocusOut: true });
       if (key && key.trim()) {
         await context.secrets.store("pica.nousKey", key.trim());
         vscode.window.showInformationMessage("Pica: key saved 🐾");

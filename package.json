@@ -2,7 +2,7 @@
   "name": "pica-tutor",
   "displayName": "Pica — learn the code your AI writes",
   "description": "A pixel cat that rides along with your AI coding agent, explains the code it writes in designer language, and drills you until it sticks.",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "publisher": "stimuler",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
@@ -35,13 +35,13 @@
       "properties": {
         "pica.model": {
           "type": "string",
-          "default": "nousresearch/hermes-4-70b",
-          "description": "OpenRouter model for Pica's text (teaching, chat, games). Use a ':free' model to run without credits — e.g. nousresearch/hermes-3-llama-3.1-405b:free, qwen/qwen3-coder:free, meta-llama/llama-3.3-70b-instruct:free."
+          "default": "",
+          "description": "Optional model override for Pica's text (teaching, chat, games). Leave blank to use a smart default for your key's provider. If set, match it to your key: OpenRouter (author/model, e.g. nousresearch/hermes-4-70b or a ':free' model), Google Gemini (gemini-2.0-flash), or OpenAI (gpt-4o-mini). A model that doesn't fit your key is ignored."
         },
         "pica.visionModel": {
           "type": "string",
-          "default": "google/gemma-4-31b-it:free",
-          "description": "OpenRouter vision model for analysing attached screenshots/images (Hermes is text-only). Default is free."
+          "default": "",
+          "description": "Optional vision-model override for analysing attached screenshots. Leave blank to auto-pick per provider (Gemini/OpenAI models see images directly; on OpenRouter, Pica uses a free vision model since Hermes is text-only)."
         },
         "pica.agentName": {
           "type": "string",

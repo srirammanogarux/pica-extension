@@ -46,8 +46,8 @@
   // ---------- states ----------
   function showNeedKey() {
     setStatus("step 2 of 2 — your key");
-    pica("Almost in 🐾 Last step: paste <strong>your own OpenRouter key</strong>. It powers my brain, gets stored <strong>only on this machine</strong>, and your usage bills to you — never to anyone else.");
-    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="sk-or-…"/><div style="height:6px"></div><a class="k-link" href="https://openrouter.ai/keys">get a key → openrouter.ai/keys</a><div class="k-link" style="margin-top:5px">No credits? No problem — I run on <strong>free models</strong> too. After you\'re in, run “Pica: Choose Model” and pick a free one 🐾</div></div>');
+    pica("Almost in 🐾 Last step: paste <strong>your own API key</strong> — <strong>OpenRouter</strong>, <strong>Google Gemini</strong>, or <strong>OpenAI</strong>. It powers my brain, gets stored <strong>only on this machine</strong>, and your usage bills to you — never to anyone else.");
+    const wrap = el('<div class="msg" style="display:block"><input class="inp" id="keyin" type="password" placeholder="sk-or-…  ·  AIza…  ·  sk-…"/><div style="height:6px"></div><a class="k-link" href="https://openrouter.ai/keys">OpenRouter →</a> &nbsp;·&nbsp; <a class="k-link" href="https://aistudio.google.com/apikey">Gemini →</a> &nbsp;·&nbsp; <a class="k-link" href="https://platform.openai.com/api-keys">OpenAI →</a><div class="k-link" style="margin-top:5px">Free option: a <strong>Google Gemini</strong> key has a generous free tier, and <strong>OpenRouter</strong> has free models (run “Pica: Choose Model”) 🐾</div></div>');
     thread.appendChild(wrap);
     const saveB = action("Save my key");
     const inp = wrap.querySelector("#keyin");
