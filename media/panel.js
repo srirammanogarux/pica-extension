@@ -125,8 +125,8 @@
         if (m.data.concept) pica("<strong>Concept:</strong> " + md(m.data.concept));
         pica("Want to own it? Pick your game 🎮");
         const row = el('<div class="row"></div>');
-        const bMcq = el('<button class="act">🎮 Practice — MCQ</button>');
-        const bCode = el('<button class="act act--ghost">🎮 Practice — Code</button>');
+        const bMcq = el('<button class="act" style="font-family:var(--mono);font-size:12px">🎮 Practice — MCQ</button>');
+        const bCode = el('<button class="act act--ghost" style="font-family:var(--mono);font-size:12px">🎮 Practice — Code</button>');
         bMcq.addEventListener("click", function () { typing(true); vscode.postMessage({ type: "game", mode: "mcq" }); });
         bCode.addEventListener("click", function () { typing(true); vscode.postMessage({ type: "game", mode: "code" }); });
         row.appendChild(bMcq); row.appendChild(bCode);

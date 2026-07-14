@@ -12,7 +12,7 @@ const vscode = require("vscode");
 const CONFIG = {
   PROXY_BASE: "https://doting-cuttlefish-341.convex.site", // Pica backend: verifies signup email
   CONVEX_URL: "https://doting-cuttlefish-341.convex.cloud", // usage pings (email+counts only)
-  LANDING: "https://pica-landing.vercel.app",
+  LANDING: "https://coachme-pica.vercel.app",
   API_BASE: "https://openrouter.ai/api/v1",   // inference — always the USER'S own key
   DEFAULT_MODEL: "nousresearch/hermes-4-70b",
   DEBOUNCE_MS: 1400,     // let an agent write-burst settle before teaching
