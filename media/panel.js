@@ -106,9 +106,31 @@
       case "pickedImage": if (m.data) setImage(m.data); return;
       case "status": setStatus(m.text); return;
       case "busy": typing(!!m.on); if (headcat && !cheerTimer) setCat(m.on ? "think" : "idle"); return;
-      case "error": typing(false); err(m.text); return;
+      case "error": {
+        typing(false);
+        err(m.text);
+        if (m.action === "changeKey") {
+          const kb = action("🔑 Change key");
+          kb.addEventListener("click", function () { kb.remove(); vscode.postMessage({ type: "changeKey" }); });
+        }
+        return;
+      }
       case "spotted": {
-        sys("👀 " + agentName() + " touched " + m.file);
+        sys("👀 " + agentName() + " changed " + m.file + (m.loc ? " · " + m.loc : ""));
+        if (m.changes && m.changes.length > 1) {
+          const wrap = el('<div class="msg msg--sys" style="display:block"></div>');
+          wrap.appendChild(el('<div style="margin-bottom:5px">' + m.changes.length + ' files changed — starting with <strong>' + escapeHtml(m.teaching) + '</strong>. Tap another to switch:</div>'));
+          const row = el('<div class="row" style="flex-wrap:wrap"></div>');
+          m.changes.forEach(function (ch) {
+            const chip = el('<button class="act act--ghost" style="font-size:11px"></button>');
+            chip.textContent = ch.file + " (+" + ch.count + ")";
+            if (ch.file === m.teaching) chip.disabled = true;
+            else chip.addEventListener("click", function () { typing(true); vscode.postMessage({ type: "teachFile", file: ch.file }); });
+            row.appendChild(chip);
+          });
+          wrap.appendChild(row);
+          thread.appendChild(wrap); scroll();
+        }
         typing(true);
         return;
       }
@@ -122,6 +144,12 @@
       }
       case "lesson": {
         if (!m.data) return;
+        if (m.data.snippet) {
+          sys("📄 " + m.data.file + (m.data.loc ? " · " + m.data.loc : "") + " — the exact lines I'm explaining:");
+          codeBlock(m.data.snippet);
+          const rb = action("👁 Show me in the file", true);
+          rb.addEventListener("click", function () { vscode.postMessage({ type: "revealCode" }); });
+        }
         pica(md(m.data.explanation));
         if (m.data.concept) pica("<strong>Concept:</strong> " + md(m.data.concept));
         pica("Want to own it? Pick your game 🎮");
@@ -265,6 +293,8 @@
   askInp.addEventListener("keydown", function (e) { if (e.key === "Enter") ask(); });
   function tool(id, type) { const b = document.getElementById(id); if (b) b.addEventListener("click", function () { typing(true); vscode.postMessage({ type: type }); }); }
   tool("t-recap", "recap"); tool("t-quiz", "quiz"); tool("t-fp", "filePractice"); tool("t-fpcheck", "fileCheck");
+  var gearBtn = document.getElementById("gear");
+  if (gearBtn) gearBtn.addEventListener("click", function () { vscode.postMessage({ type: "openSettings" }); });
   document.querySelectorAll(".tone").forEach(function (b) {
     b.addEventListener("click", function () {
       state.tone = b.dataset.tone; markTone();

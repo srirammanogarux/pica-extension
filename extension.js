@@ -299,6 +299,30 @@ function addedLines(oldText, newText) {
   return out;
 }
 
+// Like addedLines, but also reports WHERE the change is (1-based line numbers in
+// the new file) and a copy-of-the-real-code snippet — so Pica can cite file:line,
+// show the exact lines it's talking about, and reveal them in the editor.
+function changeInfo(oldText, newText) {
+  const oldSet = new Set((oldText || "").split("\n").map((l) => l.trim()));
+  const newLines = newText.split("\n");
+  const idxs = [], lines = [];
+  for (let i = 0; i < newLines.length; i++) {
+    const t = newLines[i].trim();
+    if (!t || t.length < 3) continue;
+    if (/^[{}()\[\];,]+$/.test(t)) continue;
+    if (!oldSet.has(t)) { idxs.push(i); lines.push(newLines[i]); if (lines.length >= 60) break; }
+  }
+  if (!idxs.length) return { lines: [], count: 0, startLine: 0, endLine: 0, snippet: "" };
+  const start = idxs[0], end = idxs[idxs.length - 1];
+  const spanEnd = Math.min(end, start + 24);        // cap the shown span
+  const snippet = newLines.slice(start, spanEnd + 1).join("\n").slice(0, 1200);
+  return { lines, count: lines.length, startLine: start + 1, endLine: end + 1, snippet };
+}
+function locLabel(startLine, endLine) {
+  if (!startLine) return "";
+  return startLine === endLine ? ("L" + startLine) : ("L" + startLine + "–" + endLine);
+}
+
 // ---------------------------------------------------------------------
 // The panel (webview) — all UI lives here
 // ---------------------------------------------------------------------
@@ -332,6 +356,7 @@ class PicaPanel {
     <button data-tone="friend" class="tone">Friend</button>
     <button data-tone="professor" class="tone">Prof</button>
   </div>
+  <button class="gear" id="gear" title="Settings — change API key, model, agent">⚙</button>
 </header>
 <nav class="toolsrow">
   <button class="tool" id="t-recap" title="Short recap of what's being built">📋 Recap</button>
@@ -454,7 +479,7 @@ class Engine {
         }
         case "saveKey": {
           const key = String(m.key || "").trim();
-          if (key.length < 12) return this.panel.post({ type: "error", text: "That key looks too short — paste the whole thing (starts with sk-or-…)." });
+          if (key.length < 12) return this.panel.post({ type: "error", text: "That key looks too short — paste the whole thing (sk-or-… / AIza… / sk-ant-… / sk-…)." });
           await this.context.secrets.store("pica.nousKey", key);
           return this.sendInit();
         }
@@ -464,6 +489,10 @@ class Engine {
         case "practiceSubmit": return this.checkPractice(m.answer);
         case "feedback":  return this.saveFeedback(m.rating, m.note);
         case "feedbackDismiss": this.context.globalState.update("pica.feedbackGiven", true); return;
+        case "teachFile": return this.teachFile(String(m.file || ""));
+        case "revealCode": return this.revealCode();
+        case "openSettings": return this.openSettings();
+        case "changeKey": return vscode.commands.executeCommand("pica.setApiKey");
         case "ask":       return this.answer(String(m.text || ""), m.image || null);
         case "pickImage": return this.pickImage();
         case "recap":     return this.recap();
@@ -499,8 +528,8 @@ class Engine {
   fail(e) {
     const msg = String((e && e.message) || e);
     if (msg === "NO_KEY")     return this.panel.post({ type: "needKey" });
-    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work — double-check it (OpenRouter, Gemini, Anthropic/Claude, or OpenAI) and re-paste via “Pica: Set My API Key”." });
-    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of credits/quota on your provider — top up, or if you're on OpenRouter run “Pica: Choose Model” and pick a free one 🐾" });
+    if (msg === "BAD_KEY")    return this.panel.post({ type: "error", text: "That key didn't work — double-check it (OpenRouter, Gemini, Anthropic/Claude, or OpenAI).", action: "changeKey" });
+    if (msg === "NO_CREDITS") return this.panel.post({ type: "error", text: "Out of credits/quota on your provider — top up, switch keys, or (on OpenRouter) pick a free model.", action: "changeKey" });
     if (msg === "RATE_LIMIT") return this.panel.post({ type: "error", text: "Whoa — your provider says too many requests too fast (429). Give it a few seconds and try again 🐾" });
     this.panel.post({ type: "error", text: "Pica hiccupped: " + msg.slice(0, 140) });
   }
@@ -548,25 +577,35 @@ class Engine {
     this.pending.clear();
     if (!batch.length) return;
 
-    // pick the file with the most new material
-    let best = null;
+    // capture what changed in EACH file (with line numbers), so we can show the
+    // full picture when the agent touches several files at once.
+    const changed = [];
     for (const [fsPath, text] of batch) {
       const old = this.snapshots.get(fsPath);
-      const added = addedLines(old, text);
+      const ci = changeInfo(old, text);
       this.snapshots.set(fsPath, text);
-      if (!best || added.length > best.added.length) best = { fsPath, added };
+      if (ci.count > 0) changed.push({ fsPath, rel: vscode.workspace.asRelativePath(fsPath), ...ci });
     }
-    if (!best || best.added.length === 0) return;
+    if (!changed.length) return;
     if (Date.now() - this.lastTeachAt < CONFIG.COOLDOWN_MS) return;   // pace the teaching
     this.lastTeachAt = Date.now();
 
-    const rel = vscode.workspace.asRelativePath(best.fsPath);
-    const diffText = "File: " + rel + "\nAdded/changed lines:\n" + best.added.slice(0, 40).join("\n").slice(0, 3000);
+    changed.sort((a, b) => b.count - a.count);       // teach the biggest change first
+    this.lastBatch = changed;                         // keep so the user can pick another file
+    const changesList = changed.map((c) => ({ file: c.rel, count: c.count }));
+    await this.teachChange(changed[0], changesList);
+  }
+
+  // Teach one specific change. `changesList` (optional) is the full multi-file
+  // summary shown so the user isn't guessing which snippet Pica means.
+  async teachChange(c, changesList) {
+    const rel = c.rel, loc = locLabel(c.startLine, c.endLine);
+    const diffText = "File: " + rel + " (lines " + c.startLine + "-" + c.endLine + ")\nThe exact lines the agent added/changed:\n" + c.lines.slice(0, 40).join("\n").slice(0, 3000);
     this.lastDiffText = diffText;
-    this.recentDiffs.push({ file: rel, lines: best.added.slice(0, 12), at: Date.now() });
+    this.recentDiffs.push({ file: rel, lines: c.lines.slice(0, 12), at: Date.now() });
     if (this.recentDiffs.length > 4) this.recentDiffs.shift();
 
-    this.panel.post({ type: "spotted", file: rel });
+    this.panel.post({ type: "spotted", file: rel, loc, teaching: rel, changes: (changesList && changesList.length > 1) ? changesList : null });
     let lesson = null;
     try {
       const raw = await hermesChat(this.context, [
@@ -576,13 +615,49 @@ class Engine {
       lesson = parseLessonJSON(raw);
       if (!lesson) lesson = { teaser: this.agentName + " just wrote something worth knowing — want the short version?", explanation: raw.slice(0, 600), concept: "", practice: null };
     } catch (e) { this.panel.post({ type: "spotfail" }); return this.fail(e); }
-    lesson.file = rel;
+    lesson.file = rel; lesson.loc = loc; lesson.startLine = c.startLine; lesson.endLine = c.endLine; lesson.snippet = c.snippet;
     this.lesson = lesson;
+    this.lessonFsPath = c.fsPath;                     // so “Show me in the file” can reveal it
     if (lesson.concept) {
       this.taughtConcepts.push(lesson.concept);
       if (this.taughtConcepts.length > 8) this.taughtConcepts.shift();
     }
-    this.panel.post({ type: "moment", data: { file: rel, teaser: lesson.teaser, hasPractice: !!(lesson.practice && lesson.practice.display && lesson.practice.answer) } });
+    this.panel.post({ type: "moment", data: { file: rel, loc, snippet: c.snippet, teaser: lesson.teaser, hasPractice: !!(lesson.practice && lesson.practice.display && lesson.practice.answer) } });
+  }
+
+  // User tapped a different file from the multi-change summary — teach that one.
+  async teachFile(rel) {
+    const c = (this.lastBatch || []).find((x) => x.rel === rel);
+    if (!c) return;
+    this.panel.post({ type: "busy", on: true });
+    try { await this.teachChange(c, (this.lastBatch || []).map((x) => ({ file: x.rel, count: x.count }))); }
+    finally { this.panel.post({ type: "busy", on: false }); }
+  }
+
+  // Settings gear → one place to change key / model / agent / email.
+  async openSettings() {
+    const items = [
+      { label: "$(key) Change API key", cmd: "pica.setApiKey", detail: "OpenRouter / Gemini / Claude / OpenAI" },
+      { label: "$(list-selection) Choose model", cmd: "pica.chooseModel", detail: "pick a model for your key (free options too)" },
+      { label: "$(hubot) Set coding agent name", cmd: "pica.setAgent", detail: "Claude Code / Cursor / …" },
+      { label: "$(mail) Change signup email", cmd: "pica.setEmail", detail: "the email you got access with" },
+    ];
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: "Pica settings" });
+    if (pick) vscode.commands.executeCommand(pick.cmd);
+  }
+
+  // Open the taught file and select/reveal the exact changed lines.
+  async revealCode() {
+    if (!this.lessonFsPath || !this.lesson) return;
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(this.lessonFsPath));
+      const ed = await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
+      const s = Math.max(0, (this.lesson.startLine || 1) - 1);
+      const e = Math.min(doc.lineCount - 1, Math.max(s, (this.lesson.endLine || s + 1) - 1));
+      const range = new vscode.Range(s, 0, e, doc.lineAt(e).text.length);
+      ed.selection = new vscode.Selection(range.start, range.end);
+      ed.revealRange(range, vscode.TextEditorRevealType.InCenter);
+    } catch (err) { this.panel.post({ type: "error", text: "Couldn't open that file." }); }
   }
 
   // ---------- practice ----------

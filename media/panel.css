@@ -23,6 +23,8 @@ img.sprite,#thread img{image-rendering:pixelated}
 .tones{margin-left:auto;display:flex;gap:4px}
 .tone{font-family:var(--mono);font-size:9px;padding:3px 6px;background:#2a2320;color:#c9bfb5;border:1px solid #000;cursor:pointer}
 .tone.on{background:var(--orange);color:var(--ink);font-weight:700}
+.gear{margin-left:4px;font-size:13px;line-height:1;padding:3px 6px;background:#2a2320;color:#c9bfb5;border:1px solid #000;cursor:pointer}
+.gear:hover{background:var(--orange);color:var(--ink)}
 
 /* tools row */
 .toolsrow{display:flex;gap:5px;padding:6px 8px;background:var(--sky);border-bottom:2px solid var(--dark);flex:0 0 auto;flex-wrap:wrap}
