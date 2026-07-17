@@ -5,6 +5,11 @@
   "version": "0.9.6",
   "publisher": "stimuler",
   "license": "MIT",
+  "icon": "media/pica.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/srirammanogarux/pica-extension"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
